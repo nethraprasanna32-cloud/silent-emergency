@@ -1,0 +1,7 @@
+# Normalization
+
+The schema separates people, households, locations, areas, organizations, volunteers, skills, languages, resource types, resource stock, needs, signals, rules, matches, reservations, consent, imports and provenance into keyed relations. Repeating skills/languages and need-to-signal or bundle membership use junction tables. Catalog data (signal types, need types, resource types) is separated from events and inventory. Natural identifiers have unique constraints where appropriate.
+
+Deliberate denormalization: `person.vulnerability_tags` and `household.vulnerability_tags` are arrays for compact tag filtering; `match.score_breakdown` and alternatives' reasons are JSONB to preserve per-version explainability; `signal.payload` and import raw rows preserve heterogeneous source fields; `match.triggering_signal_ids` is a response snapshot while `need_signal` is the normalized relation. Area centroid is cached alongside polygon to support offline fallback geocoding. These do not replace normalized identity/catalog relations.
+
+Index rationale: GiST indexes support spatial candidate lookup on area polygons/centroids and locations; trigram GIN supports fuzzy area-name resolution; B-tree indexes support person/area and signal/time lookup, resource type/expiry availability and reservation TTL; partial indexes restrict open needs, pending outbox work and unprocessed changes. `EXPLAIN (ANALYZE, BUFFERS)` measurements are pending a running database; no execution plan claims are made.

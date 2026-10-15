@@ -1,0 +1,5 @@
+target_table: signal
+columns:
+  pseudonym: {target: pseudonym, required: true, transform: strip}
+  scheme: {target: scheme, required: true, transform: strip}
+  renewal_due: {target: occurred_at, required: true, transform: strip}

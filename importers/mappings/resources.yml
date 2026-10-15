@@ -1,0 +1,6 @@
+target_table: resource
+columns:
+  type: {target: resource_type, required: true, transform: strip}
+  quantity: {target: quantity_total, required: true, transform: int}
+  expiry: {target: expires_at, transform: strip}
+  perishable: {target: perishable, transform: bool, default: false}

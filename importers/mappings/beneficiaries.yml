@@ -1,0 +1,6 @@
+target_table: person
+columns:
+  pseudonym: {target: pseudonym, required: true, transform: strip}
+  age_band: {target: age_band, transform: strip}
+  household_size: {target: household_size, transform: int, default: 1}
+  living_alone: {target: living_alone, transform: bool, default: false}

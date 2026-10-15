@@ -1,0 +1,6 @@
+target_table: volunteer
+columns:
+  name: {target: person_name, required: true, transform: strip}
+  pseudonym: {target: pseudonym, required: true, transform: strip}
+  verified: {target: verified, transform: bool, default: false}
+  mode: {target: mode, transform: lower, default: walk}

@@ -1,0 +1,9 @@
+target_table: ngo
+columns:
+  name: {target: name, required: true, transform: strip}
+  registration_id: {target: registration_id, transform: strip}
+  type: {target: ngo_type, transform: strip}
+  state: {target: state, transform: strip}
+  district: {target: district, transform: strip}
+  address: {target: address, transform: strip}
+  capacity: {target: capacity, transform: int, default: 0}

@@ -1,0 +1,5 @@
+target_table: signal
+columns:
+  pseudonym: {target: pseudonym, required: true, transform: strip}
+  event_type: {target: signal_type, required: true, transform: lower}
+  event_date: {target: occurred_at, required: true, transform: strip}

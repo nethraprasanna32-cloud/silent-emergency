@@ -1,0 +1,4 @@
+target_table: area
+columns:
+  name: {target: name, required: true, transform: strip}
+  area_type: {target: area_type, required: true, transform: lower}

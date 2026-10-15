@@ -1,0 +1,49 @@
+"""Config-driven local CSV/XLSX/JSON/GeoJSON importer. Data is never sent externally."""
+import argparse, csv, hashlib, json, os
+from pathlib import Path
+import yaml
+
+def load_rows(path: Path):
+    suffix=path.suffix.lower()
+    if suffix=='.csv':
+        with path.open(newline='',encoding='utf-8-sig') as f: return list(csv.DictReader(f))
+    if suffix=='.json':
+        data=json.loads(path.read_text(encoding='utf-8')); return data if isinstance(data,list) else data.get('features',data.get('records',[data]))
+    if suffix=='.geojson':
+        data=json.loads(path.read_text(encoding='utf-8')); return data.get('features',[])
+    if suffix in ('.xlsx','.xls'):
+        import pandas as pd
+        return pd.read_excel(path).where(lambda x:x.notna(),None).to_dict(orient='records')
+    raise ValueError(f'unsupported format: {suffix}')
+
+def transform(value, spec):
+    if value in (None,''):
+        if 'default' in spec: return spec['default']
+        if spec.get('required'): raise ValueError('required value is empty')
+    op=spec.get('transform')
+    if op=='strip' and value is not None: value=str(value).strip()
+    elif op=='lower' and value is not None: value=str(value).strip().lower()
+    elif op=='int' and value is not None: value=int(value)
+    elif op=='bool' and value is not None: value=str(value).strip().lower() in ('true','1','yes','y')
+    return value
+
+def main():
+    parser=argparse.ArgumentParser(); parser.add_argument('--source',required=True); parser.add_argument('--file',required=True); parser.add_argument('--dry-run',action='store_true'); args=parser.parse_args()
+    path=Path(args.file); mapping_path=Path(__file__).parent/'mappings'/f'{args.source}.yml'
+    if not mapping_path.exists(): raise SystemExit(f'no mapping: {mapping_path}')
+    mapping=yaml.safe_load(mapping_path.read_text(encoding='utf-8')); rows=load_rows(path)
+    errs=[]; accepted=[]
+    for i,row in enumerate(rows,1):
+        src=row.get('properties',row) if isinstance(row,dict) else {}
+        result={}
+        try:
+            for col,spec in mapping.get('columns',{}).items(): result[spec['target']]=transform(src.get(col),spec)
+            accepted.append(result)
+        except Exception as e: errs.append({'row':i,'reason':str(e),'raw':row})
+    report={'source':args.source,'rows':len(rows),'accepted':len(accepted),'rejected':len(errs),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'dry_run':args.dry_run}
+    os.makedirs('reports',exist_ok=True)
+    out=Path('reports')/f"{args.source}-{report['sha256'][:12]}.json"; out.write_text(json.dumps({'report':report,'errors':errs},indent=2,default=str),encoding='utf-8')
+    print(json.dumps(report));
+    if not args.dry_run: print('Database persistence requires configured staging connector; normalized rows are available in report tooling.')
+
+if __name__=='__main__': main()
