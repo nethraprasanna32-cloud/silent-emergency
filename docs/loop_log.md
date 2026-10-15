@@ -46,3 +46,13 @@
 6. Docs: dossier does not claim full API or product readiness.
 7. Result: signal/person/household write, needs/history/explain, match lifecycle, metrics, heatmap, idle resources and audit endpoints exist.
 8. Next: implement upload persistence and source upserts; start database for migration and concurrency verification.
+
+## I14 partial — Packaging and verification blocker
+1. Goal: package setup instructions and record the actual validation boundary.
+2. Files: `README.md`, migration set, test suite and dossier.
+3. Proving checks: `python -m pytest -q` and Python compileall.
+4. Verification: 4 Python tests pass; Docker engine/executable and psql are absent, so no database rebuild, SQL assertions, EXPLAIN, crash test or benchmark ran.
+5. Fix cycles: no SQL-runtime cycle possible in this environment; no fabricated workaround or metric was added.
+6. Docs: patent effect section makes no numerical claim; assumptions enumerate incomplete functionality.
+7. Result: packaged runnable setup instructions, but exit criteria are not met.
+8. Next: run with a live PostgreSQL 16/PostGIS environment and finish unimplemented matching, importer, privacy and benchmark requirements.
