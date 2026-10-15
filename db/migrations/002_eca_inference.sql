@@ -40,8 +40,19 @@ DECLARE p record; r record; sc numeric; cf numeric; sids bigint[]; nid bigint; c
    IF cardinality(sids)>=r.min_signal_count AND sc>=r.threshold AND cf>=r.min_confidence THEN
      INSERT INTO need(person_id,need_type_id,area_id,location_id,score,confidence,status,priority,sla_due_at)
        VALUES(p_person,r.need_type_id,p.area_id,p.location_id,sc,cf,CASE WHEN cf>=.75 THEN 'confirmed'::need_status ELSE 'suspected'::need_status END,greatest(1,round(sc*100)::int),now()+interval '24 hours')
-       ON CONFLICT DO NOTHING RETURNING id INTO nid;
-     IF nid IS NOT NULL THEN changed:=changed+1; INSERT INTO need_signal SELECT nid,sid,0 FROM unnest(sids) sid ON CONFLICT DO NOTHING; END IF;
+       ON CONFLICT (person_id,need_type_id) WHERE person_id IS NOT NULL AND status IN ('suspected','confirmed')
+       DO UPDATE SET score=excluded.score,confidence=excluded.confidence,
+         status=CASE WHEN excluded.confidence>=.75 THEN 'confirmed'::need_status ELSE need.status END,
+         priority=greatest(need.priority,excluded.priority),updated_at=now() RETURNING id INTO nid;
+     IF nid IS NOT NULL THEN
+       changed:=changed+1;
+       DELETE FROM need_signal WHERE need_id=nid AND NOT(signal_id=ANY(sids));
+       INSERT INTO need_signal(need_id,signal_id,contribution)
+       SELECT nid,s.id,st.default_weight*coalesce(s.source_reliability,st.source_reliability)*
+          exp(-ln(2)*extract(epoch FROM (now()-s.occurred_at))/greatest(extract(epoch FROM st.half_life),1))
+       FROM unnest(sids) AS ids(signal_id) JOIN signal s ON s.id=ids.signal_id JOIN signal_type st USING(signal_type_id)
+       ON CONFLICT(need_id,signal_id) DO UPDATE SET contribution=excluded.contribution;
+     END IF;
    END IF;
  END LOOP; RETURN changed;
 END $$;

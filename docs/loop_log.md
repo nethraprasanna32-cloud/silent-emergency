@@ -56,3 +56,9 @@
 6. Docs: patent effect section makes no numerical claim; assumptions enumerate incomplete functionality.
 7. Result: packaged runnable setup instructions, but exit criteria are not met.
 8. Next: run with a live PostgreSQL 16/PostGIS environment and finish unimplemented matching, importer, privacy and benchmark requirements.
+
+## Follow-up — Front-end contract hardening
+- Added browser CORS configuration, API-version response header, upload endpoint, resource/availability/consent routes, audit paging and OpenAPI contract tests.
+- Added advisory-lock-backed idempotency-key payload binding for API write workflows and stable database error responses.
+- Added `docs/frontend-integration.md`; documented that public auth/RBAC, encrypted display-name storage, full importer upserts, live SQL validation and benchmark exit criteria remain incomplete.
+- Verification: `10 passed`; compileall passed; `pglast` parsed all five migration files. This is a grammar check only and does not execute SQL or validate PL/pgSQL function bodies.

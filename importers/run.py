@@ -2,6 +2,7 @@
 import argparse, csv, hashlib, json, os
 from pathlib import Path
 import yaml
+from psycopg.types.json import Jsonb
 
 def load_rows(path: Path):
     suffix=path.suffix.lower()
@@ -27,9 +28,8 @@ def transform(value, spec):
     elif op=='bool' and value is not None: value=str(value).strip().lower() in ('true','1','yes','y')
     return value
 
-def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('--source',required=True); parser.add_argument('--file',required=True); parser.add_argument('--dry-run',action='store_true'); args=parser.parse_args()
-    path=Path(args.file); mapping_path=Path(__file__).parent/'mappings'/f'{args.source}.yml'
+def process_source(source: str, path: Path, dry_run: bool=False):
+    mapping_path=Path(__file__).parent/'mappings'/f'{source}.yml'
     if not mapping_path.exists(): raise SystemExit(f'no mapping: {mapping_path}')
     mapping=yaml.safe_load(mapping_path.read_text(encoding='utf-8')); rows=load_rows(path)
     errs=[]; accepted=[]; normalized_by_row={}
@@ -41,20 +41,31 @@ def main():
             accepted.append(result); normalized_by_row[i]=result
         except Exception as e: errs.append({'row':i,'reason':str(e),'raw':row})
     digest=hashlib.sha256(path.read_bytes()).hexdigest()
-    report={'source':args.source,'rows':len(rows),'accepted':len(accepted),'rejected':len(errs),'sha256':digest,'dry_run':args.dry_run}
+    report={'source':source,'rows':len(rows),'accepted':len(accepted),'rejected':len(errs),'sha256':digest,'dry_run':dry_run}
     os.makedirs('reports',exist_ok=True)
-    out=Path('reports')/f"{args.source}-{report['sha256'][:12]}.json"
-    if not args.dry_run:
+    out=Path('reports')/f"{source}-{report['sha256'][:12]}.json"
+    if not dry_run:
         from app.db import connection
         with connection() as conn:
-            batch=conn.execute("INSERT INTO import_batch(source,file_name,file_hash,status,row_count,accepted_count,rejected_count) VALUES(%s,%s,%s,'staged',%s,%s,%s) ON CONFLICT(source,file_hash) DO UPDATE SET source=excluded.source RETURNING id",(args.source,path.name,digest,len(rows),len(accepted),len(errs))).fetchone()[0]
+            existing=conn.execute("SELECT id,report FROM import_batch WHERE source=%s AND file_hash=%s",(source,digest)).fetchone()
+            if existing:
+                old=existing[1]
+                if old: return {**old,'batch_id':existing[0]},[]
+                batch=existing[0]
+            else:
+                batch=conn.execute("INSERT INTO import_batch(source,file_name,file_hash,status,row_count,accepted_count,rejected_count) VALUES(%s,%s,%s,'staged',%s,%s,%s) RETURNING id",(source,path.name,digest,len(rows),len(accepted),len(errs))).fetchone()[0]
             for i,row in enumerate(rows,1):
-                conn.execute("INSERT INTO stg_record(batch_id,row_number,source_record,normalized_record,status) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(batch_id,row_number) DO NOTHING",(batch,i,json.dumps(row,default=str),json.dumps(normalized_by_row[i],default=str) if i in normalized_by_row else None,'accepted' if i in normalized_by_row else 'rejected'))
+                conn.execute("INSERT INTO stg_record(batch_id,row_number,source_record,normalized_record,status) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(batch_id,row_number) DO NOTHING",(batch,i,Jsonb(row),Jsonb(normalized_by_row[i]) if i in normalized_by_row else None,'accepted' if i in normalized_by_row else 'rejected'))
             for e in errs: conn.execute("INSERT INTO import_row_error(batch_id,row_number,reason,raw_value) VALUES(%s,%s,%s,%s)",(batch,e['row'],e['reason'],json.dumps(e['raw'],default=str)))
             report['batch_id']=batch
-            conn.execute("UPDATE import_batch SET report=%s,completed_at=now() WHERE id=%s",(json.dumps(report),batch))
+            conn.execute("UPDATE import_batch SET status='staged',report=%s,completed_at=now() WHERE id=%s",(Jsonb(report),batch))
     out.write_text(json.dumps({'report':report,'errors':errs},indent=2,default=str),encoding='utf-8')
+    return report,errs
+
+def main():
+    parser=argparse.ArgumentParser(); parser.add_argument('--source',required=True); parser.add_argument('--file',required=True); parser.add_argument('--dry-run',action='store_true'); args=parser.parse_args()
+    report,errs=process_source(args.source,Path(args.file),args.dry_run)
     print(json.dumps(report));
-    if not args.dry_run: print(f"Staged import batch {report.get('batch_id')} (core-entity normalization/upsert still requires source-specific handlers).")
+    if not args.dry_run: print(f"Staged import batch {report.get('batch_id')} (core-entity upsert still requires source-specific handlers).")
 
 if __name__=='__main__': main()

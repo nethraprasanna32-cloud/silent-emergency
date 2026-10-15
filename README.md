@@ -27,4 +27,6 @@ Run the local unit tests with `python -m pytest -q`. The importer supports `pyth
 
 ## Validation status
 
-Python checks pass (4 tests). Database migrations, SQL assertions, concurrency, RLS, performance benchmarks and crash recovery have not been run: Docker CLI is installed in the authoring environment, but no Docker Desktop executable/daemon or local `psql` is available. No performance or patentability claims are made. See `docs/assumptions.md` and `docs/loop_log.md` for gaps.
+Python checks pass (10 tests), including API/OpenAPI contract checks; PostgreSQL migration statements parse with `pglast`. Database migrations, SQL assertions, concurrency, RLS, performance benchmarks and crash recovery have not been run: Docker CLI is installed in the authoring environment, but no Docker Desktop executable/daemon or local `psql` is available. No performance or patentability claims are made. See `docs/assumptions.md` and `docs/loop_log.md` for gaps.
+
+Front-end routes, OpenAPI schema, CORS defaults and request conventions are documented in [docs/frontend-integration.md](docs/frontend-integration.md). The API is not safe for public exposure until authentication and authorization are integrated.

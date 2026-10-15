@@ -1,4 +1,5 @@
 CREATE TABLE IF NOT EXISTS api_idempotency (key text PRIMARY KEY, operation text NOT NULL, response jsonb, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE api_idempotency ADD COLUMN IF NOT EXISTS request_hash text;
 CREATE OR REPLACE FUNCTION sed_audit_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit_log is append-only'; END $$;
 DROP TRIGGER IF EXISTS audit_no_mutation ON audit_log;
 CREATE TRIGGER audit_no_mutation BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION sed_audit_immutable();
