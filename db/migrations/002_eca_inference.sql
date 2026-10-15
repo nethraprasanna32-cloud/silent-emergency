@@ -12,12 +12,22 @@ END LOOP; END $$;
 INSERT INTO signal_type(name,default_weight,half_life,source_reliability) VALUES
 ('missed_checkin',.68,interval '5 days',.8),('aid_lapse',.75,interval '10 days',.85),('scheme_renewal_overdue',.6,interval '30 days',.9),('living_alone_no_contact',.55,interval '14 days',.7),('repeated_assistance',.62,interval '21 days',.85),('utility_flag',.5,interval '7 days',.8),('health_camp_absence',.4,interval '30 days',.7),('school_dropout',.7,interval '45 days',.8),('household_income_drop',.68,interval '30 days',.75),('disaster_zone_entry',.9,interval '3 days',.9)
 ON CONFLICT(name) DO NOTHING;
+INSERT INTO need_type(name,required_skills,sla) VALUES
+('food_support',ARRAY['distribution'],interval '12 hours'),
+('medical_support',ARRAY['first_aid'],interval '4 hours'),
+('wellbeing_visit',ARRAY['community_visit'],interval '48 hours'),
+('welfare_support',ARRAY['casework'],interval '72 hours')
+ON CONFLICT(name) DO NOTHING;
+CREATE UNIQUE INDEX IF NOT EXISTS need_rule_version_key ON need_rule(need_type_id,coalesce(signal_type_id,0),version);
+INSERT INTO need_rule(need_type_id,threshold,min_signal_count,min_confidence)
+SELECT id,.28,1,.30 FROM need_type ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS anomaly_result(id bigserial PRIMARY KEY, area_id bigint REFERENCES area(id), signal_type_id bigint REFERENCES signal_type(id), observed_rate numeric NOT NULL, baseline_rate numeric NOT NULL, z_score numeric NOT NULL, calculated_at timestamptz NOT NULL DEFAULT now());
 CREATE UNIQUE INDEX IF NOT EXISTS need_person_type_open_unique ON need(person_id,need_type_id) WHERE person_id IS NOT NULL AND status IN ('suspected','confirmed');
 CREATE OR REPLACE FUNCTION sed_signal_score(p_person bigint,p_household bigint,p_need_type bigint,p_at timestamptz DEFAULT now()) RETURNS TABLE(score numeric,confidence numeric,signal_ids bigint[]) LANGUAGE sql STABLE AS $$
  WITH eligible AS (SELECT s.id,s.signal_type_id,s.occurred_at,st.default_weight,st.half_life,coalesce(s.source_reliability,st.source_reliability) reliability
    FROM signal s JOIN signal_type st USING(signal_type_id)
    WHERE (p_person IS NOT NULL AND s.person_id=p_person OR p_household IS NOT NULL AND s.household_id=p_household)
+     AND (p_need_type IS NULL OR EXISTS(SELECT 1 FROM need_rule nr WHERE nr.need_type_id=p_need_type AND nr.active AND (nr.signal_type_id IS NULL OR nr.signal_type_id=s.signal_type_id)))
      AND s.occurred_at<=p_at AND s.occurred_at>p_at-interval '365 days'),
  calc AS (SELECT *,default_weight*reliability*exp(-ln(2)*extract(epoch FROM (p_at-occurred_at))/greatest(extract(epoch FROM half_life),1)) contrib FROM eligible),
  agg AS (SELECT coalesce(sum(contrib),0) raw,count(*) n,count(DISTINCT signal_type_id) diversity,coalesce(avg(reliability),0) reliability,coalesce(max(exp(-ln(2)*extract(epoch FROM (p_at-occurred_at))/greatest(extract(epoch FROM half_life),1))),0) recency,array_agg(id) ids FROM calc)

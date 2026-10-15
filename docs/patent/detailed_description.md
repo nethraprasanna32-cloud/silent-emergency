@@ -6,7 +6,7 @@ PostgreSQL stores entity and catalog relations, temporal need history, signal ev
 
 The initial worker handles signal/person inference and area or resource-related deltas. Spatial matching uses `ST_DWithin` against the changed area's geometry and a bounded local radius. It does not yet have a compatibility-aware global optimizer. The table model supports need bundles and explainable matches, but automatic bundle construction is unfinished.
 
-The assignment function locks records, checks available quantity, decrements stock, inserts a proposed match and TTL reservation, changes need state and writes a hash-chained audit event in one transaction. A caller must begin a SERIALIZABLE transaction and retry serialization/deadlock SQLSTATEs. Release of expired reservations restores stock and emits a rematch event. Verify SQL syntax and isolation behavior against a running target before deployment.
+The assignment function locks records, checks available quantity, decrements stock, inserts a proposed match and TTL reservation, changes need state and writes a hash-chained audit event in one transaction. A caller must begin a SERIALIZABLE transaction and retry serialization/deadlock SQLSTATEs. The candidate-cost view calculates geographic distance, skill hits, volunteer reliability, ETA, starvation age and expiry urgency. A global optimizer is not yet connected to this view. Release of expired reservations restores stock and emits a rematch event. Verify SQL syntax and isolation behavior against a running target before deployment.
 
 ## Variants
 

@@ -25,3 +25,14 @@
 - SQL rebuild and EXPLAIN: not run because no Docker daemon or local psql. No SQL-runtime assertion claimed.
 - Importer now persists raw and normalized staging rows, errors and per-batch metadata when DATABASE_URL points at an initialized database. Core upsert remains pending.
 - Commit I1: `44ec259`.
+- Commit I2: `249a0a3`.
+
+## I7 partial — Candidate cost and assignment solver
+1. Goal: create SQL candidate features and global assignment primitive.
+2. Files: `db/migrations/004_matching.sql`, `app/matching.py`, simulation route.
+3. Proving checks: unit assignment matrix test and static compilation.
+4. Verification: database view, query plan, and end-to-end transaction not run (engine unavailable).
+5. Fix cycles: one code review pass; limitations remain documented.
+6. Docs: patent description marks optimizer orchestration as incomplete.
+7. Result: candidate view and SciPy linear-sum assignment helper exist; fairness cost is parameterized.
+8. Next: finish source-specific import upsert, complete API and transaction retry, then run full DB suite.
