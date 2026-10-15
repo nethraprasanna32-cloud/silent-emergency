@@ -32,18 +32,29 @@ def main():
     path=Path(args.file); mapping_path=Path(__file__).parent/'mappings'/f'{args.source}.yml'
     if not mapping_path.exists(): raise SystemExit(f'no mapping: {mapping_path}')
     mapping=yaml.safe_load(mapping_path.read_text(encoding='utf-8')); rows=load_rows(path)
-    errs=[]; accepted=[]
+    errs=[]; accepted=[]; normalized_by_row={}
     for i,row in enumerate(rows,1):
         src=row.get('properties',row) if isinstance(row,dict) else {}
         result={}
         try:
             for col,spec in mapping.get('columns',{}).items(): result[spec['target']]=transform(src.get(col),spec)
-            accepted.append(result)
+            accepted.append(result); normalized_by_row[i]=result
         except Exception as e: errs.append({'row':i,'reason':str(e),'raw':row})
-    report={'source':args.source,'rows':len(rows),'accepted':len(accepted),'rejected':len(errs),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'dry_run':args.dry_run}
+    digest=hashlib.sha256(path.read_bytes()).hexdigest()
+    report={'source':args.source,'rows':len(rows),'accepted':len(accepted),'rejected':len(errs),'sha256':digest,'dry_run':args.dry_run}
     os.makedirs('reports',exist_ok=True)
-    out=Path('reports')/f"{args.source}-{report['sha256'][:12]}.json"; out.write_text(json.dumps({'report':report,'errors':errs},indent=2,default=str),encoding='utf-8')
+    out=Path('reports')/f"{args.source}-{report['sha256'][:12]}.json"
+    if not args.dry_run:
+        from app.db import connection
+        with connection() as conn:
+            batch=conn.execute("INSERT INTO import_batch(source,file_name,file_hash,status,row_count,accepted_count,rejected_count) VALUES(%s,%s,%s,'staged',%s,%s,%s) ON CONFLICT(source,file_hash) DO UPDATE SET source=excluded.source RETURNING id",(args.source,path.name,digest,len(rows),len(accepted),len(errs))).fetchone()[0]
+            for i,row in enumerate(rows,1):
+                conn.execute("INSERT INTO stg_record(batch_id,row_number,source_record,normalized_record,status) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(batch_id,row_number) DO NOTHING",(batch,i,json.dumps(row,default=str),json.dumps(normalized_by_row[i],default=str) if i in normalized_by_row else None,'accepted' if i in normalized_by_row else 'rejected'))
+            for e in errs: conn.execute("INSERT INTO import_row_error(batch_id,row_number,reason,raw_value) VALUES(%s,%s,%s,%s)",(batch,e['row'],e['reason'],json.dumps(e['raw'],default=str)))
+            report['batch_id']=batch
+            conn.execute("UPDATE import_batch SET report=%s,completed_at=now() WHERE id=%s",(json.dumps(report),batch))
+    out.write_text(json.dumps({'report':report,'errors':errs},indent=2,default=str),encoding='utf-8')
     print(json.dumps(report));
-    if not args.dry_run: print('Database persistence requires configured staging connector; normalized rows are available in report tooling.')
+    if not args.dry_run: print(f"Staged import batch {report.get('batch_id')} (core-entity normalization/upsert still requires source-specific handlers).")
 
 if __name__=='__main__': main()

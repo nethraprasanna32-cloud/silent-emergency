@@ -18,4 +18,10 @@
 5. Fix cycles: tests run once; record outcome after execution.
 6. Docs: document offline/no-network importer behavior and persistence gap.
 7. Result: command supports CSV, XLSX, JSON, GeoJSON, dry-run and row rejection report.
-8. Next: integrate staging/upsert, entity resolution and quality reports.
+8. Next: integrate source-specific core upsert, entity resolution and quality reports.
+
+## I1/I2 verification addendum
+- Python tests: `2 passed`; compileall passed.
+- SQL rebuild and EXPLAIN: not run because no Docker daemon or local psql. No SQL-runtime assertion claimed.
+- Importer now persists raw and normalized staging rows, errors and per-batch metadata when DATABASE_URL points at an initialized database. Core upsert remains pending.
+- Commit I1: `44ec259`.
