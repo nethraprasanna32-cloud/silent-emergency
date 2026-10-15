@@ -6,3 +6,5 @@
 - Offline mode is the default. Geocoding through an external service is intentionally absent.
 - Dossier content describes implemented mechanisms and flags incomplete paths. No prior-art citations or fabricated performance values are asserted.
 - The current importer parses and validates mapped input and emits reports, but does not yet persist normalized records to PostgreSQL; API and matcher coverage is partial.
+- The SQL optimizer component currently provides a Hungarian assignment helper and candidate feature view. It is not yet orchestrated into automatic match creation or min-cost-flow allocation.
+- RLS policies and the SERIALIZABLE assignment path are authored but remain unverified against a live PostgreSQL server.

@@ -36,3 +36,13 @@
 6. Docs: patent description marks optimizer orchestration as incomplete.
 7. Result: candidate view and SciPy linear-sum assignment helper exist; fairness cost is parameterized.
 8. Next: finish source-specific import upsert, complete API and transaction retry, then run full DB suite.
+
+## I12 partial — API and lifecycle endpoints
+1. Goal: expose the database workflow through thin FastAPI handlers.
+2. Files: `app/main.py`, `db/migrations/005_api_lifecycle.sql`.
+3. Proving checks: Python compilation and unit suite.
+4. Verification: live route integration cannot run without PostgreSQL; API coverage incomplete.
+5. Fix cycles: one review pass; transaction-retry assignment route uses SERIALIZABLE connections.
+6. Docs: dossier does not claim full API or product readiness.
+7. Result: signal/person/household write, needs/history/explain, match lifecycle, metrics, heatmap, idle resources and audit endpoints exist.
+8. Next: implement upload persistence and source upserts; start database for migration and concurrency verification.
