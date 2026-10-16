@@ -299,6 +299,22 @@ def list_volunteers():
         for r in rows: result.append({'id':r[0],'name':r[1],'skill':_type_for_ui(r[2]),**_map_xy(bounds,r[3],r[4]),'free':bool(r[5])})
         return result
 
+@app.get('/directory')
+def directory():
+    """Return import-backed directory records for the Directory UI."""
+    with connection() as c:
+        ngos = _json_rows(c.execute("SELECT id,name,registration_id,ngo_type,state,district,address,sectors,capacity,active FROM ngo ORDER BY name"))
+        volunteers = _json_rows(c.execute("""SELECT v.id,v.person_name name,v.mode,v.verified,v.active,
+          coalesce(array_agg(DISTINCT s.skill) FILTER (WHERE s.skill IS NOT NULL),'{}') skills,
+          coalesce(array_agg(DISTINCT l.language) FILTER (WHERE l.language IS NOT NULL),'{}') languages
+          FROM volunteer v LEFT JOIN volunteer_skill s ON s.volunteer_id=v.id
+          LEFT JOIN volunteer_language l ON l.volunteer_id=v.id GROUP BY v.id ORDER BY v.person_name"""))
+        resources = _json_rows(c.execute("""SELECT r.id,rt.name item,rt.category,r.quantity_available quantity,
+          r.quantity_total,r.expires_at,r.perishable,coalesce(n.name,'Unassigned NGO') ngo
+          FROM resource r JOIN resource_type rt ON rt.id=r.resource_type_id LEFT JOIN ngo n ON n.id=r.owner_ngo_id
+          ORDER BY rt.name,r.id"""))
+        return {'ngos':ngos,'volunteers':volunteers,'resources':resources}
+
 @app.get('/needs/{need_id}/matches')
 def matches_for_need(need_id:int):
     with connection() as c:
