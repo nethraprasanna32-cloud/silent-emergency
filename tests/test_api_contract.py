@@ -50,3 +50,4 @@ def test_frontend_is_served_by_same_fastapi_origin():
     response=client.get('/ui/')
     assert response.status_code==200
     assert 'Silent Emergency Database System' in response.text
+    assert 'Import data' in response.text
