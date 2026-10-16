@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silent Emergency Database System</title>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css"></head><body>
+<div class="frame"><div class="shell">
+<aside class="side">
+ <a class="logo" href="#/home"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect width="30" height="30" rx="9" fill="#f4a3c4"/><circle cx="15" cy="15" r="5" fill="#470a2a"/><circle cx="15" cy="15" r="10" fill="none" stroke="#470a2a" stroke-width="1.6" opacity=".5"/></svg>Silent Emergency</a>
+ <nav id="nav" aria-label="Pages"></nav>
+ <button class="chip" id="bk" title="Set the backend address"><span class="dot" id="bd"></span><span id="bt">Checking backend</span></button>
+</aside>
+<div class="sheet">
+<header class="top"><h1 class="mega" id="ptitle">Where needs meet help</h1><button class="dk" id="scan">Run detection scan</button></header>
+<main>
+<section class="pg on" id="pg-home">
+ <div class="hc">
+  <div class="hl"><h2>Every second counts. <em>Find needs before they ask.</em></h2><p>The system reads what NGOs already store about people, resources and volunteers, spots likely needs on its own and suggests the nearest match.</p></div>
+  <svg class="hart" viewBox="0 0 300 360" aria-hidden="true"><path d="M20 340C60 250 140 300 170 200S250 90 290 20" stroke="#6d2144" stroke-width="22" fill="none" stroke-linecap="round" opacity=".7"/><path d="M60 90L150 170L240 260" stroke="#fde7a0" stroke-dasharray="6 6" opacity=".6" fill="none"/><g fill="none" stroke="#f4a3c4" stroke-width="2"><circle class="rg" cx="150" cy="170" r="40"/><circle class="rg" cx="150" cy="170" r="40" style="animation-delay:1.1s"/><circle class="rg" cx="150" cy="170" r="40" style="animation-delay:2.2s"/></g><circle cx="150" cy="170" r="42" fill="#f4a3c4"/><path d="M130 172l14 14 28-30" stroke="#470a2a" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="60" cy="90" r="10" fill="#fde7a0"/><circle cx="240" cy="260" r="10" fill="#bfeedd"/></svg>
+  <div class="gc"><h3>Top priority case</h3><div class="amt" id="h-chips"><button data-t="any" class="on">Any</button><button data-t="food">Food</button><button data-t="medical">Medical</button><button data-t="shelter">Shelter</button></div><div id="h-body"></div><button class="dk" id="h-go" style="width:100%">Assign best match</button></div>
+ </div>
+ <section class="imp"><h2 class="sh w">Our impact</h2><div class="tiles4">
+  <div class="st" style="background:var(--rose)"><b id="i-open">0</b>Open needs found without a request</div>
+  <div class="st" style="background:var(--mint)"><b id="i-done">0</b>Cases matched and assigned</div>
+  <div class="st" style="background:var(--lav)"><b id="i-vol">0</b>Volunteers free right now</div>
+  <div class="st" style="background:var(--butter)"><b id="i-stock">0</b>Resource units in stock</div></div>
+  <a class="dk amber" href="#/hist">See activity</a></section>
+</section>
+
+<section class="pg" id="pg-needs">
+ <div class="bar"><div class="tabs" id="n-tabs"><button class="on" data-t="open">Open</button><button data-t="assigned">Assigned</button></div>
+  <div class="amt" id="n-chips"><button data-t="any" class="on">Any</button><button data-t="food">Food</button><button data-t="medical">Medical</button><button data-t="shelter">Shelter</button></div>
+  <input class="search" id="q" type="search" placeholder="Search by area or signal" aria-label="Search needs"></div>
+ <div class="cards" id="h-cards"></div>
+</section>
+
+<section class="pg" id="pg-match"><div class="mg">
+ <div class="pn"><h3>Cases by priority</h3><div class="cases" id="m-cases"></div></div>
+ <div><div class="pn"><h3 id="m-t">Best matches</h3><div id="m-list"><p class="muted">Pick a case to see its ranked matches.</p></div></div>
+  <div class="pn" style="margin-top:16px"><h3>Transaction</h3><pre id="sql">-- Press Assign to commit a match.</pre></div></div>
+</div></section>
+
+<section class="pg" id="pg-map">
+ <div class="pn"><h3>Map</h3><svg class="map" id="map" viewBox="0 0 640 400" role="img" aria-label="Map of needs, resources and volunteers"></svg>
+  <div class="lg"><span><i style="background:#c44d8a"></i>Need</span><span><i style="background:#470a2a;border-radius:3px"></i>Resource</span><span><i style="background:#e9a23b;border-radius:3px"></i>Volunteer</span></div></div>
+</section>
+
+<section class="pg" id="pg-dir"><div class="pn"><div class="tabs" id="d-tabs"><button class="on" data-t="ngos">NGOs</button><button data-t="res">Resources</button><button data-t="vols">Volunteers</button></div><div class="tbl" id="d-t"></div></div></section>
+
+<section class="pg" id="pg-hist"><div class="cards" id="h-news" style="margin-bottom:22px"></div><div class="pn"><h3>All assignments</h3><div class="tbl" id="h-t"></div></div></section>
+
+<section class="pg" id="pg-about"><div class="pn" style="max-width:780px"><p style="font-size:17px;margin-top:0">Silent Emergency is a database-driven system that finds people who need help even when they haven't asked. It keeps people, NGOs, volunteers, needs, locations and resources in one relational database, ranks the needs it detects, and suggests the nearest available resource and volunteer.</p>
+<div class="chips"><span>Detects needs on its own</span><span>Ranks by priority and distance</span><span>Matches resources and volunteers</span><span>Updates as data changes</span></div>
+<p class="muted">BACSE202 Database Systems, Vellore Institute of Technology. Rakshit Mathur (25BCE0417), Nethra P (25BCE0465). Faculty guide: Dr. Saritha Murali.</p></div></section>
+</main>
+</div></div></div>
+<div class="toast" id="toast" role="status"></div>
+<script src="script.js"></script></body></html>
