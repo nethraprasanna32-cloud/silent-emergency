@@ -58,6 +58,30 @@ def process_source(source: str, path: Path, dry_run: bool=False):
                 conn.execute("INSERT INTO stg_record(batch_id,row_number,source_record,normalized_record,status) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(batch_id,row_number) DO NOTHING",(batch,i,Jsonb(row),Jsonb(normalized_by_row[i]) if i in normalized_by_row else None,'accepted' if i in normalized_by_row else 'rejected'))
             for e in errs: conn.execute("INSERT INTO import_row_error(batch_id,row_number,reason,raw_value) VALUES(%s,%s,%s,%s)",(batch,e['row'],e['reason'],json.dumps(e['raw'],default=str)))
             report['batch_id']=batch
+            # Promote validated rows into the normalized core tables. Natural keys
+            # make re-imports idempotent while keeping the staging record for audit.
+            if source == 'ngos':
+                for row in accepted:
+                    conn.execute("""INSERT INTO ngo(name,registration_id,ngo_type,state,district,address,capacity)
+                      VALUES(%s,%s,%s,%s,%s,%s,%s)
+                      ON CONFLICT(registration_id) DO UPDATE SET name=EXCLUDED.name,ngo_type=EXCLUDED.ngo_type,
+                        state=EXCLUDED.state,district=EXCLUDED.district,address=EXCLUDED.address,capacity=EXCLUDED.capacity""",
+                      (row.get('name'),row.get('registration_id') or None,row.get('ngo_type'),row.get('state'),row.get('district'),row.get('address'),row.get('capacity') or 0))
+            elif source == 'volunteers':
+                for row in accepted:
+                    conn.execute("""INSERT INTO volunteer(person_name,pseudonym,verified,mode)
+                      VALUES(%s,%s,%s,%s) ON CONFLICT(pseudonym) DO UPDATE SET person_name=EXCLUDED.person_name,
+                      verified=EXCLUDED.verified,mode=EXCLUDED.mode""",
+                      (row.get('person_name'),row.get('pseudonym'),row.get('verified',False),row.get('mode') or 'walk'))
+            elif source == 'resources':
+                for row in accepted:
+                    rt=conn.execute("""INSERT INTO resource_type(name,category,unit) VALUES(%s,%s,'unit')
+                      ON CONFLICT(name) DO UPDATE SET category=EXCLUDED.category RETURNING id""",
+                      (row.get('resource_type'),row.get('resource_type'))).fetchone()[0]
+                    qty=row.get('quantity_total') or 0
+                    conn.execute("""INSERT INTO resource(resource_type_id,quantity_total,quantity_available,expires_at,perishable)
+                      VALUES(%s,%s,%s,NULLIF(%s,'')::timestamptz,%s)
+                      ON CONFLICT DO NOTHING""",(rt,qty,qty,row.get('expires_at'),row.get('perishable',False)))
             conn.execute("UPDATE import_batch SET status='staged',report=%s,completed_at=now() WHERE id=%s",(Jsonb(report),batch))
     out.write_text(json.dumps({'report':report,'errors':errs},indent=2,default=str),encoding='utf-8')
     return report,errs
