@@ -257,7 +257,14 @@ def assign(body:AssignmentIn):
                 score=c.execute("SELECT coalesce(score,0) FROM need WHERE id=%s",(body.need_id,)).fetchone()
                 if not score: raise HTTPException(404,'need not found')
                 match_id=c.execute("SELECT sed_assign(%s,%s,%s,%s,%s,%s::jsonb)",(body.need_id,body.volunteer_id,body.resource_id,body.quantity,body.score if body.score is not None else score[0],Jsonb(body.score_breakdown or {'source':'frontend_candidate_score'}))).fetchone()[0]
-                response={'id':match_id,'status':'proposed'}
+                d=c.execute("""SELECT m.status,m.quantity,n.id,nt.name,coalesce(a.name,'Area not set'),
+                  coalesce(rt.name,'No resource'),coalesce(g.name,'Unassigned NGO'),coalesce(v.person_name,'Unassigned volunteer'),r.quantity_available
+                  FROM match m JOIN need n ON n.id=m.need_id JOIN need_type nt ON nt.id=n.need_type_id
+                  LEFT JOIN area a ON a.id=n.area_id LEFT JOIN resource r ON r.id=m.resource_id
+                  LEFT JOIN resource_type rt ON rt.id=r.resource_type_id LEFT JOIN ngo g ON g.id=r.owner_ngo_id
+                  LEFT JOIN volunteer v ON v.id=m.volunteer_id WHERE m.id=%s""",(match_id,)).fetchone()
+                response={'id':match_id,'status':d[0],'quantity':d[1],'need_id':d[2],'need_type':d[3],'area':d[4],
+                  'resource':d[5],'ngo':d[6],'volunteer':d[7],'remaining_quantity':d[8]}
                 _idempotency_put(c,body.idempotency_key,'assignment',request,response)
                 return response
         except (SerializationFailure,DeadlockDetected):
@@ -358,7 +365,16 @@ def weekly_stats():
 
 @app.post('/scan')
 def scan_changes(limit:int=100):
-    with connection() as c:return {'processed':c.execute('SELECT sed_process_change_batch(%s)',(limit,)).fetchone()[0]}
+    since=datetime.now().astimezone()
+    with connection() as c:
+        processed=c.execute('SELECT sed_process_change_batch(%s)',(limit,)).fetchone()[0]
+        rows=c.execute("""SELECT n.id,nt.name,coalesce(a.name,'Area not set'),n.priority,n.status::text,n.confidence,
+          coalesce(array_agg(DISTINCT st.name) FILTER(WHERE st.name IS NOT NULL),'{}')
+          FROM need n JOIN need_type nt ON nt.id=n.need_type_id LEFT JOIN area a ON a.id=n.area_id
+          LEFT JOIN need_signal ns ON ns.need_id=n.id LEFT JOIN signal s ON s.id=ns.signal_id LEFT JOIN signal_type st ON st.id=s.signal_type_id
+          WHERE n.updated_at >= %s GROUP BY n.id,nt.name,a.name ORDER BY n.priority DESC LIMIT 100""",(since,)).fetchall()
+        changed=[{'id':r[0],'type':r[1],'area':r[2],'priority':r[3],'status':r[4],'confidence':float(r[5]),'signals':list(r[6] or [])} for r in rows]
+        return {'processed':processed,'needs_changed':changed}
 
 @app.get("/needs/{need_id}/history")
 def need_history(need_id:int):
@@ -399,7 +415,7 @@ async def import_upload(source:str=Form(...),file:UploadFile=File(...)):
                 dest.write(chunk)
         report,errors=process_source(source,path,False)
         public_errors=[{k:e[k] for k in ('row','column','reason') if k in e} for e in errors]
-        return {'batch_id':report.get('batch_id'),'status':'staged','report':report,'errors':public_errors}
+        return {'batch_id':report.get('batch_id'),'status':report.get('status','staged'),'report':report,'errors':public_errors}
     except HTTPException: raise
     except (ValueError,UnicodeError) as exc: raise HTTPException(422,'import file could not be parsed or validated') from exc
     finally:

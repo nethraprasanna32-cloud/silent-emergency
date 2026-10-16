@@ -49,8 +49,9 @@ def process_source(source: str, path: Path, dry_run: bool=False):
         with connection() as conn:
             existing=conn.execute("SELECT id,report FROM import_batch WHERE source=%s AND file_hash=%s",(source,digest)).fetchone()
             if existing:
-                old=existing[1]
-                if old: return {**old,'batch_id':existing[0]},[]
+                # Reprocess earlier staged-only batches after promotion logic is added.
+                if existing[1] and existing[1].get('status')=='imported':
+                    return {**existing[1],'batch_id':existing[0]},[]
                 batch=existing[0]
             else:
                 batch=conn.execute("INSERT INTO import_batch(source,file_name,file_hash,status,row_count,accepted_count,rejected_count) VALUES(%s,%s,%s,'staged',%s,%s,%s) RETURNING id",(source,path.name,digest,len(rows),len(accepted),len(errs))).fetchone()[0]
@@ -58,31 +59,36 @@ def process_source(source: str, path: Path, dry_run: bool=False):
                 conn.execute("INSERT INTO stg_record(batch_id,row_number,source_record,normalized_record,status) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(batch_id,row_number) DO NOTHING",(batch,i,Jsonb(row),Jsonb(normalized_by_row[i]) if i in normalized_by_row else None,'accepted' if i in normalized_by_row else 'rejected'))
             for e in errs: conn.execute("INSERT INTO import_row_error(batch_id,row_number,reason,raw_value) VALUES(%s,%s,%s,%s)",(batch,e['row'],e['reason'],json.dumps(e['raw'],default=str)))
             report['batch_id']=batch
+            changes=[]
             # Promote validated rows into the normalized core tables. Natural keys
             # make re-imports idempotent while keeping the staging record for audit.
             if source == 'ngos':
                 for row in accepted:
-                    conn.execute("""INSERT INTO ngo(name,registration_id,ngo_type,state,district,address,capacity)
+                    rec=conn.execute("""INSERT INTO ngo(name,registration_id,ngo_type,state,district,address,capacity)
                       VALUES(%s,%s,%s,%s,%s,%s,%s)
                       ON CONFLICT(registration_id) DO UPDATE SET name=EXCLUDED.name,ngo_type=EXCLUDED.ngo_type,
-                        state=EXCLUDED.state,district=EXCLUDED.district,address=EXCLUDED.address,capacity=EXCLUDED.capacity""",
-                      (row.get('name'),row.get('registration_id') or None,row.get('ngo_type'),row.get('state'),row.get('district'),row.get('address'),row.get('capacity') or 0))
+                        state=EXCLUDED.state,district=EXCLUDED.district,address=EXCLUDED.address,capacity=EXCLUDED.capacity RETURNING id,name,registration_id""",
+                      (row.get('name'),row.get('registration_id') or None,row.get('ngo_type'),row.get('state'),row.get('district'),row.get('address'),row.get('capacity') or 0)).fetchone()
+                    changes.append({'entity':'NGO','id':rec[0],'name':rec[1],'key':rec[2],'action':'inserted or updated'})
             elif source == 'volunteers':
                 for row in accepted:
-                    conn.execute("""INSERT INTO volunteer(person_name,pseudonym,verified,mode)
+                    rec=conn.execute("""INSERT INTO volunteer(person_name,pseudonym,verified,mode)
                       VALUES(%s,%s,%s,%s) ON CONFLICT(pseudonym) DO UPDATE SET person_name=EXCLUDED.person_name,
-                      verified=EXCLUDED.verified,mode=EXCLUDED.mode""",
-                      (row.get('person_name'),row.get('pseudonym'),row.get('verified',False),row.get('mode') or 'walk'))
+                      verified=EXCLUDED.verified,mode=EXCLUDED.mode RETURNING id,person_name,pseudonym""",
+                      (row.get('person_name'),row.get('pseudonym'),row.get('verified',False),row.get('mode') or 'walk')).fetchone()
+                    changes.append({'entity':'Volunteer','id':rec[0],'name':rec[1],'key':rec[2],'action':'inserted or updated'})
             elif source == 'resources':
                 for row in accepted:
                     rt=conn.execute("""INSERT INTO resource_type(name,category,unit) VALUES(%s,%s,'unit')
                       ON CONFLICT(name) DO UPDATE SET category=EXCLUDED.category RETURNING id""",
                       (row.get('resource_type'),row.get('resource_type'))).fetchone()[0]
                     qty=row.get('quantity_total') or 0
-                    conn.execute("""INSERT INTO resource(resource_type_id,quantity_total,quantity_available,expires_at,perishable)
+                    rec=conn.execute("""INSERT INTO resource(resource_type_id,quantity_total,quantity_available,expires_at,perishable)
                       VALUES(%s,%s,%s,NULLIF(%s,'')::timestamptz,%s)
-                      ON CONFLICT DO NOTHING""",(rt,qty,qty,row.get('expires_at'),row.get('perishable',False)))
-            conn.execute("UPDATE import_batch SET status='staged',report=%s,completed_at=now() WHERE id=%s",(Jsonb(report),batch))
+                      RETURNING id,quantity_available""",(rt,qty,qty,row.get('expires_at'),row.get('perishable',False))).fetchone()
+                    changes.append({'entity':'Resource','id':rec[0],'name':row.get('resource_type'),'quantity':rec[1],'ngo':'Unassigned NGO','action':'inserted'})
+            report.update({'batch_id':batch,'status':'imported','changes':changes,'records':accepted})
+            conn.execute("UPDATE import_batch SET status='imported',report=%s,completed_at=now() WHERE id=%s",(Jsonb(report),batch))
     out.write_text(json.dumps({'report':report,'errors':errs},indent=2,default=str),encoding='utf-8')
     return report,errs
 
@@ -90,6 +96,6 @@ def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--source',required=True); parser.add_argument('--file',required=True); parser.add_argument('--dry-run',action='store_true'); args=parser.parse_args()
     report,errs=process_source(args.source,Path(args.file),args.dry_run)
     print(json.dumps(report));
-    if not args.dry_run: print(f"Staged import batch {report.get('batch_id')} (core-entity upsert still requires source-specific handlers).")
+    if not args.dry_run: print(f"Imported batch {report.get('batch_id')}: {len(report.get('changes',[]))} core records inserted or updated.")
 
 if __name__=='__main__': main()
