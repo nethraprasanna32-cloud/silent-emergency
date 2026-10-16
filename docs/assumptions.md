@@ -10,3 +10,4 @@
 - RLS policies and the SERIALIZABLE assignment path are authored but remain unverified against a live PostgreSQL server.
 - The API now exposes an OpenAPI contract, CORS and endpoint request validation, but it does not implement end-user authentication or trusted role propagation to PostgreSQL. Public deployment is not safe until those controls exist.
 - The API's person display name remains a plaintext field; full pgcrypto-backed PII handling is incomplete.
+- Local Compose verification uses host port 5433 because host port 5432 is occupied by the unrelated `proxyproof_db` container. Other machines can use 5432 by setting `SED_DB_HOST_PORT=5432` when available.

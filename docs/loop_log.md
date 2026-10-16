@@ -68,3 +68,10 @@
 - Added API response adapters for the UI's map/card view, added `/ui/` static serving, and escaped dynamic registry/need text before HTML rendering.
 - Added frontend repository setup/API mapping notes and a Docker build ignore file that preserves the UI while omitting both Git metadata directories.
 - Verification: frontend JavaScript syntax checked with Node; FastAPI TestClient covers the served UI and expected OpenAPI routes; backend Python and PostgreSQL grammar suites run separately. Live SQL remains unexecuted because PostgreSQL is unavailable.
+
+## Live Compose verification
+- Started Docker Desktop from its per-user installation path.
+- Resolved host-port collision with an unrelated `proxyproof_db` container by publishing SED PostgreSQL on host port 5433 (internal Compose port remains 5432).
+- Fixed two real PostgreSQL bootstrap errors: incorrect `signal_type` join key and incorrect `need_type`/`need_rule` join key.
+- Rebuilt the fresh SED volume successfully: PostGIS database healthy, API healthy, `/ui/` and `/openapi.json` return 200.
+- Smoke-tested person creation with consent, signal ingestion, `/scan`, and `/needs`; the worker processed the queued changes and created inferred needs.

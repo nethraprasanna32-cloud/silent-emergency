@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS anomaly_result(id bigserial PRIMARY KEY, area_id bigi
 CREATE UNIQUE INDEX IF NOT EXISTS need_person_type_open_unique ON need(person_id,need_type_id) WHERE person_id IS NOT NULL AND status IN ('suspected','confirmed');
 CREATE OR REPLACE FUNCTION sed_signal_score(p_person bigint,p_household bigint,p_need_type bigint,p_at timestamptz DEFAULT now()) RETURNS TABLE(score numeric,confidence numeric,signal_ids bigint[]) LANGUAGE sql STABLE AS $$
  WITH eligible AS (SELECT s.id,s.signal_type_id,s.occurred_at,st.default_weight,st.half_life,coalesce(s.source_reliability,st.source_reliability) reliability
-   FROM signal s JOIN signal_type st USING(signal_type_id)
+   FROM signal s JOIN signal_type st ON st.id=s.signal_type_id
    WHERE (p_person IS NOT NULL AND s.person_id=p_person OR p_household IS NOT NULL AND s.household_id=p_household)
      AND (p_need_type IS NULL OR EXISTS(SELECT 1 FROM need_rule nr WHERE nr.need_type_id=p_need_type AND nr.active AND (nr.signal_type_id IS NULL OR nr.signal_type_id=s.signal_type_id)))
      AND s.occurred_at<=p_at AND s.occurred_at>p_at-interval '365 days'),
@@ -35,7 +35,7 @@ CREATE OR REPLACE FUNCTION sed_signal_score(p_person bigint,p_household bigint,p
 CREATE OR REPLACE FUNCTION sed_recompute_person(p_person bigint) RETURNS int LANGUAGE plpgsql AS $$
 DECLARE p record; r record; sc numeric; cf numeric; sids bigint[]; nid bigint; changed int:=0; BEGIN SELECT * INTO p FROM person WHERE id=p_person; IF NOT FOUND THEN RETURN 0; END IF;
  IF NOT EXISTS(SELECT 1 FROM person_consent WHERE person_id=p_person AND purpose='need_inference' AND withdrawn_at IS NULL) THEN RETURN 0; END IF;
- FOR r IN SELECT nt.id need_type_id,nr.threshold,nr.min_signal_count,nr.min_confidence FROM need_type nt JOIN need_rule nr USING(need_type_id) WHERE nr.active LOOP
+ FOR r IN SELECT nt.id need_type_id,nr.threshold,nr.min_signal_count,nr.min_confidence FROM need_type nt JOIN need_rule nr ON nr.need_type_id=nt.id WHERE nr.active LOOP
    SELECT x.score,x.confidence,x.signal_ids INTO sc,cf,sids FROM sed_signal_score(p_person,NULL,r.need_type_id) x;
    IF cardinality(sids)>=r.min_signal_count AND sc>=r.threshold AND cf>=r.min_confidence THEN
      INSERT INTO need(person_id,need_type_id,area_id,location_id,score,confidence,status,priority,sla_due_at)
@@ -50,7 +50,7 @@ DECLARE p record; r record; sc numeric; cf numeric; sids bigint[]; nid bigint; c
        INSERT INTO need_signal(need_id,signal_id,contribution)
        SELECT nid,s.id,st.default_weight*coalesce(s.source_reliability,st.source_reliability)*
           exp(-ln(2)*extract(epoch FROM (now()-s.occurred_at))/greatest(extract(epoch FROM st.half_life),1))
-       FROM unnest(sids) AS ids(signal_id) JOIN signal s ON s.id=ids.signal_id JOIN signal_type st USING(signal_type_id)
+       FROM unnest(sids) AS ids(signal_id) JOIN signal s ON s.id=ids.signal_id JOIN signal_type st ON st.id=s.signal_type_id
        ON CONFLICT(need_id,signal_id) DO UPDATE SET contribution=excluded.contribution;
      END IF;
    END IF;

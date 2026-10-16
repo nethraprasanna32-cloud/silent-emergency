@@ -284,7 +284,7 @@ def get_needs(status: str | None = None, area: int | None = None):
 def list_resources():
     with connection() as c:
         rows=c.execute("""SELECT r.id,rt.name,rt.category,r.quantity_available,ST_X(l.point::geometry),ST_Y(l.point::geometry),coalesce(g.name,'Unassigned NGO')
-          FROM resource r JOIN resource_type rt USING(resource_type_id) LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN location l ON l.id=r.location_id
+          FROM resource r JOIN resource_type rt ON rt.id=r.resource_type_id LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN location l ON l.id=r.location_id
           WHERE r.quantity_available>0 ORDER BY rt.name,r.expires_at NULLS LAST,r.id LIMIT 1000""").fetchall();bounds=_map_bounds(c); result=[]
         for r in rows: result.append({'id':r[0],'name':r[1],'type':_type_for_ui(r[2]),'qty':r[3],**_map_xy(bounds,r[4],r[5]),'ngo':r[6]})
         return result
@@ -306,7 +306,7 @@ def matches_for_need(need_id:int):
         if not exists:raise HTTPException(404,'need not found')
         rows=c.execute("""SELECT c.resource_id,c.volunteer_id,c.distance_m,c.priority,c.skill_hits,c.reliability,c.expiry_urgency,c.eta_minutes,
           r.quantity_available,rt.name resource_name,coalesce(g.name,'Unassigned NGO'),v.person_name
-          FROM sed_candidate_cost c JOIN resource r ON r.id=c.resource_id JOIN resource_type rt USING(resource_type_id)
+          FROM sed_candidate_cost c JOIN resource r ON r.id=c.resource_id JOIN resource_type rt ON rt.id=r.resource_type_id
           LEFT JOIN ngo g ON g.id=r.owner_ngo_id JOIN volunteer v ON v.id=c.volunteer_id
           WHERE c.need_id=%s AND c.in_radius AND r.quantity_available>0 AND v.active
             AND NOT EXISTS(SELECT 1 FROM match m WHERE m.volunteer_id=v.id AND m.status IN ('proposed','accepted') AND (m.during IS NULL OR m.during @> now()))
@@ -325,7 +325,7 @@ def assistance_history():
     with connection() as c:
         rows=c.execute("""SELECT ah.occurred_at,m.need_id,nt.name,rt.name resource_name,coalesce(v.person_name,'Unassigned'),coalesce(g.name,'Unassigned NGO')
           FROM assistance_history ah JOIN match m ON m.id=ah.match_id JOIN need n ON n.id=m.need_id JOIN need_type nt ON nt.id=n.need_type_id
-          LEFT JOIN resource r ON r.id=m.resource_id LEFT JOIN resource_type rt USING(resource_type_id) LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN volunteer v ON v.id=m.volunteer_id
+          LEFT JOIN resource r ON r.id=m.resource_id LEFT JOIN resource_type rt ON rt.id=r.resource_type_id LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN volunteer v ON v.id=m.volunteer_id
           WHERE ah.outcome IN ('success','delay') ORDER BY ah.occurred_at DESC LIMIT 500""").fetchall()
         now=datetime.now().astimezone();out=[]
         for r in rows:

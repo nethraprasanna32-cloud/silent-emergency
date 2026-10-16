@@ -16,6 +16,8 @@ docker compose up -d --build
 
 Open the integrated front end at `http://localhost:8000/ui/`. It calls the same FastAPI origin, so local use does not require a separate front-end server or CORS setup. When the database is unavailable the page falls back to its clearly labeled demo data.
 
+The database is published on host port `5433` by default because port `5432` is often already used by another local PostgreSQL service. Set `SED_DB_HOST_PORT=5432` only when that port is free.
+
 On a new database volume, the SQL files in `db/migrations` are applied by the Postgres image in filename order. To rebuild from zero, run `docker compose down -v` and then `docker compose up -d --build`.
 
 Run the local unit tests with `python -m pytest -q`. The importer supports `python -m importers.run --source ngos --file path.csv --dry-run`; without `--dry-run`, it records source rows in PostgreSQL staging tables. Source-specific core entity upserts are not yet implemented.
