@@ -49,6 +49,24 @@ def _json_rows(cur):
     names=[c.name for c in cur.description]
     return [dict(zip(names,row)) for row in cur.fetchall()]
 
+def _type_for_ui(name):
+    value=(name or '').lower()
+    if 'medical' in value or 'health' in value:return 'medical'
+    if 'shelter' in value or 'wellbeing' in value or 'housing' in value:return 'shelter'
+    return 'food'
+
+def _map_bounds(c):
+    row=c.execute("SELECT min(ST_X(point::geometry)),max(ST_X(point::geometry)),min(ST_Y(point::geometry)),max(ST_Y(point::geometry)) FROM location WHERE point IS NOT NULL").fetchone()
+    if not row or row[0] is None:return None
+    return row
+
+def _map_xy(bounds,lon,lat):
+    if bounds is None or lon is None or lat is None:return {'x':320,'y':200}
+    minx,maxx,miny,maxy=map(float,bounds); lon=float(lon);lat=float(lat)
+    x=320 if maxx==minx else 28+(lon-minx)/(maxx-minx)*584
+    y=200 if maxy==miny else 28+(maxy-lat)/(maxy-miny)*344
+    return {'x':round(x,1),'y':round(y,1)}
+
 def _body_hash(body):
     serialized=json.dumps(body,sort_keys=True,separators=(',',':'),default=lambda x:x.isoformat() if hasattr(x,'isoformat') else str(x))
     return hashlib.sha256(serialized.encode()).hexdigest()
@@ -109,6 +127,8 @@ class AssignmentIn(BaseModel):
     volunteer_id: int | None = Field(default=None,gt=0)
     resource_id: int | None = Field(default=None,gt=0)
     quantity: int = Field(default=0,ge=0)
+    score: float | None = Field(default=None,ge=0,le=100)
+    score_breakdown: dict = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=8,max_length=200)
 
 @app.get("/health")
@@ -236,7 +256,7 @@ def assign(body:AssignmentIn):
                 if cached is not None:return cached
                 score=c.execute("SELECT coalesce(score,0) FROM need WHERE id=%s",(body.need_id,)).fetchone()
                 if not score: raise HTTPException(404,'need not found')
-                match_id=c.execute("SELECT sed_assign(%s,%s,%s,%s,%s,%s::jsonb)",(body.need_id,body.volunteer_id,body.resource_id,body.quantity,score[0],'{"source":"api"}')).fetchone()[0]
+                match_id=c.execute("SELECT sed_assign(%s,%s,%s,%s,%s,%s::jsonb)",(body.need_id,body.volunteer_id,body.resource_id,body.quantity,body.score if body.score is not None else score[0],Jsonb(body.score_breakdown or {'source':'frontend_candidate_score'}))).fetchone()[0]
                 response={'id':match_id,'status':'proposed'}
                 _idempotency_put(c,body.idempotency_key,'assignment',request,response)
                 return response
@@ -247,8 +267,82 @@ def assign(body:AssignmentIn):
 @app.get("/needs")
 def get_needs(status: str | None = None, area: int | None = None):
     with connection() as c:
-        rows=c.execute("SELECT id,person_id,household_id,need_type_id,status,score,confidence,priority FROM need WHERE (%s IS NULL OR status=%s) AND (%s IS NULL OR area_id=%s) ORDER BY priority DESC LIMIT 500",(status,status,area,area)).fetchall()
-        return [dict(zip(("id","person_id","household_id","need_type_id","status","score","confidence","priority"),r)) for r in rows]
+        rows=c.execute("""SELECT n.id,n.person_id,n.household_id,n.need_type_id,nt.name need_type,n.status,n.score,n.confidence,n.priority,
+          a.name area_name,ST_X(l.point::geometry) lon,ST_Y(l.point::geometry) lat,
+          coalesce(array_agg(DISTINCT st.name) FILTER(WHERE st.name IS NOT NULL),'{}') signal_names
+          FROM need n JOIN need_type nt ON nt.id=n.need_type_id LEFT JOIN area a ON a.id=n.area_id LEFT JOIN location l ON l.id=n.location_id
+          LEFT JOIN need_signal ns ON ns.need_id=n.id LEFT JOIN signal s ON s.id=ns.signal_id LEFT JOIN signal_type st ON st.id=s.signal_type_id
+          WHERE (%s::text IS NULL OR n.status::text=%s::text OR (%s::text='assigned' AND n.status IN ('matched','in_progress')))
+          AND (%s::bigint IS NULL OR n.area_id=%s::bigint) GROUP BY n.id,nt.name,a.name,l.point ORDER BY n.priority DESC,n.detected_at LIMIT 500""",(status,status,status,area,area)).fetchall()
+        bounds=_map_bounds(c); result=[]
+        for r in rows:
+            xy=_map_xy(bounds,r[10],r[11]); ui_type=_type_for_ui(r[4]); sig=list(r[12] or [])
+            result.append({'id':r[0],'person_id':r[1],'household_id':r[2],'need_type_id':r[3],'type':ui_type,'area':r[9] or 'Area not set',**xy,'pr':int(r[8]),'score':float(r[6]),'confidence':float(r[7]),'sig':sig,'status':'assigned' if r[5] in ('matched','in_progress','resolved') else 'detected'})
+        return result
+
+@app.get('/resources')
+def list_resources():
+    with connection() as c:
+        rows=c.execute("""SELECT r.id,rt.name,rt.category,r.quantity_available,ST_X(l.point::geometry),ST_Y(l.point::geometry),coalesce(g.name,'Unassigned NGO')
+          FROM resource r JOIN resource_type rt USING(resource_type_id) LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN location l ON l.id=r.location_id
+          WHERE r.quantity_available>0 ORDER BY rt.name,r.expires_at NULLS LAST,r.id LIMIT 1000""").fetchall();bounds=_map_bounds(c); result=[]
+        for r in rows: result.append({'id':r[0],'name':r[1],'type':_type_for_ui(r[2]),'qty':r[3],**_map_xy(bounds,r[4],r[5]),'ngo':r[6]})
+        return result
+
+@app.get('/volunteers')
+def list_volunteers():
+    with connection() as c:
+        rows=c.execute("""SELECT v.id,v.person_name,coalesce(min(vs.skill),'community_visit') skill,ST_X(l.point::geometry),ST_Y(l.point::geometry),
+          (v.active AND NOT EXISTS(SELECT 1 FROM match m WHERE m.volunteer_id=v.id AND m.status IN ('proposed','accepted') AND (m.during IS NULL OR m.during @> now()))) free
+          FROM volunteer v LEFT JOIN volunteer_skill vs ON vs.volunteer_id=v.id LEFT JOIN location l ON l.id=v.location_id
+          GROUP BY v.id,l.point ORDER BY v.id LIMIT 1000""").fetchall();bounds=_map_bounds(c);result=[]
+        for r in rows: result.append({'id':r[0],'name':r[1],'skill':_type_for_ui(r[2]),**_map_xy(bounds,r[3],r[4]),'free':bool(r[5])})
+        return result
+
+@app.get('/needs/{need_id}/matches')
+def matches_for_need(need_id:int):
+    with connection() as c:
+        exists=c.execute('SELECT 1 FROM need WHERE id=%s',(need_id,)).fetchone()
+        if not exists:raise HTTPException(404,'need not found')
+        rows=c.execute("""SELECT c.resource_id,c.volunteer_id,c.distance_m,c.priority,c.skill_hits,c.reliability,c.expiry_urgency,c.eta_minutes,
+          r.quantity_available,rt.name resource_name,coalesce(g.name,'Unassigned NGO'),v.person_name
+          FROM sed_candidate_cost c JOIN resource r ON r.id=c.resource_id JOIN resource_type rt USING(resource_type_id)
+          LEFT JOIN ngo g ON g.id=r.owner_ngo_id JOIN volunteer v ON v.id=c.volunteer_id
+          WHERE c.need_id=%s AND c.in_radius AND r.quantity_available>0 AND v.active
+            AND NOT EXISTS(SELECT 1 FROM match m WHERE m.volunteer_id=v.id AND m.status IN ('proposed','accepted') AND (m.during IS NULL OR m.during @> now()))
+          ORDER BY c.distance_m,r.expires_at NULLS LAST LIMIT 100""",(need_id,)).fetchall()
+        out=[];seen=set()
+        for r in rows:
+            res_id,vol_id,dist,priority,skills,reliability,expiry,eta,qty,res_name,ngo_name,vol_name=r
+            if res_id in seen:continue
+            seen.add(res_id);parts={'type':1.0,'near':max(0.0,1-float(dist)/50000),'stock':min(1.0,float(qty)/10),'vol':float(reliability)}
+            score=round(parts['type']*30+parts['near']*35+parts['stock']*15+parts['vol']*20)
+            out.append({'res_id':res_id,'res':res_name,'ngo':ngo_name,'vol_id':vol_id,'vol':vol_name,'km':float(dist)/1000,'qty':qty,'score':score,'parts':parts,'eta_minutes':float(eta) if eta is not None else None,'explanation':{'skill_hits':skills,'reliability':float(reliability),'expiry_urgency':float(expiry)}})
+        return sorted(out,key=lambda x:(-x['score'],x['km']))[:10]
+
+@app.get('/history')
+def assistance_history():
+    with connection() as c:
+        rows=c.execute("""SELECT ah.occurred_at,m.need_id,nt.name,rt.name resource_name,coalesce(v.person_name,'Unassigned'),coalesce(g.name,'Unassigned NGO')
+          FROM assistance_history ah JOIN match m ON m.id=ah.match_id JOIN need n ON n.id=m.need_id JOIN need_type nt ON nt.id=n.need_type_id
+          LEFT JOIN resource r ON r.id=m.resource_id LEFT JOIN resource_type rt USING(resource_type_id) LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN volunteer v ON v.id=m.volunteer_id
+          WHERE ah.outcome IN ('success','delay') ORDER BY ah.occurred_at DESC LIMIT 500""").fetchall()
+        now=datetime.now().astimezone();out=[]
+        for r in rows:
+            age=now-r[0]; when='Just now' if age.total_seconds()<3600 else 'Today' if age.days==0 else 'Yesterday' if age.days==1 else r[0].strftime('%Y-%m-%d')
+            out.append({'when':when,'case_id':r[1],'type':_type_for_ui(r[2]),'resource':r[3] or 'Assistance','volunteer':r[4],'ngo':r[5]})
+        return out
+
+@app.get('/stats')
+def weekly_stats():
+    with connection() as c:
+        rows=c.execute("""SELECT d.day,count(m.id)::int FROM generate_series(date_trunc('week',now())::date,(date_trunc('week',now())::date+6),'1 day') d(day)
+          LEFT JOIN match m ON m.created_at>=d.day AND m.created_at<d.day+interval '1 day' GROUP BY d.day ORDER BY d.day""").fetchall()
+        return {'week':[r[1] for r in rows]}
+
+@app.post('/scan')
+def scan_changes(limit:int=100):
+    with connection() as c:return {'processed':c.execute('SELECT sed_process_change_batch(%s)',(limit,)).fetchone()[0]}
 
 @app.get("/needs/{need_id}/history")
 def need_history(need_id:int):
@@ -340,3 +434,9 @@ def simulate():
             costs[need_ids.index(n)][vol_ids.index(v)]=fairness_cost(d,p,s,rel,star,zone,exp,weights)
         pairs,total=solve(costs)
         return {'assignments':[{'need_id':need_ids[i],'volunteer_id':vol_ids[j]} for i,j in pairs],'total_cost':total,'projected_assignment_count':len(pairs),'simulation_only':True}
+
+# Serve the paired static front end from the same origin as the API for local demos.
+from fastapi.staticfiles import StaticFiles
+_ui_dir=Path(__file__).resolve().parent.parent/'silent-emergency'
+if _ui_dir.is_dir():
+    app.mount('/ui',StaticFiles(directory=str(_ui_dir),html=True),name='ui')

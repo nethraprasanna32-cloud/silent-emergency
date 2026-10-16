@@ -62,3 +62,9 @@
 - Added advisory-lock-backed idempotency-key payload binding for API write workflows and stable database error responses.
 - Added `docs/frontend-integration.md`; documented that public auth/RBAC, encrypted display-name storage, full importer upserts, live SQL validation and benchmark exit criteria remain incomplete.
 - Verification: `10 passed`; compileall passed; `pglast` parsed all five migration files. This is a grammar check only and does not execute SQL or validate PL/pgSQL function bodies.
+
+## Follow-up — Pair the static UI with the FastAPI backend
+- Updated the static frontend to use same-origin FastAPI by default and call the real SED routes for needs, resources, volunteers, history, weekly stats, candidates, scans and transactional assignment.
+- Added API response adapters for the UI's map/card view, added `/ui/` static serving, and escaped dynamic registry/need text before HTML rendering.
+- Added frontend repository setup/API mapping notes and a Docker build ignore file that preserves the UI while omitting both Git metadata directories.
+- Verification: frontend JavaScript syntax checked with Node; FastAPI TestClient covers the served UI and expected OpenAPI routes; backend Python and PostgreSQL grammar suites run separately. Live SQL remains unexecuted because PostgreSQL is unavailable.

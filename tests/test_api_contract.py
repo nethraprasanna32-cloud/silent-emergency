@@ -11,6 +11,8 @@ def test_frontend_routes_are_published_in_openapi():
         '/matches/{match_id}/complete':'post','/simulate':'post','/metrics':'get','/audit':'get',
         '/audit/verify':'get','/imports':'post','/imports/{batch_id}/report':'get',
         '/resources/{resource_id}':'patch','/volunteers/{volunteer_id}/availability':'patch',
+        '/resources':'get','/volunteers':'get','/history':'get','/stats':'get','/scan':'post',
+        '/needs/{need_id}/matches':'get',
     }
     for path,method in expected.items():
         assert method in paths[path]
@@ -43,3 +45,8 @@ def test_assignment_request_contract_is_json_body():
     operation=schema['paths']['/matches/assign']['post']
     assert operation['requestBody']['required'] is True
     assert 'application/json' in operation['requestBody']['content']
+
+def test_frontend_is_served_by_same_fastapi_origin():
+    response=client.get('/ui/')
+    assert response.status_code==200
+    assert 'Silent Emergency Database System' in response.text
