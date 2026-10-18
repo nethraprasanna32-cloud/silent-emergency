@@ -4,21 +4,20 @@ PostgreSQL/PostGIS-first prototype for consent-gated silent-need inference and a
 
 ## Requirements
 
-- Docker Engine with Compose (PostgreSQL 16 + PostGIS image)
 - Python 3.12+ for the API/importer (tested here with Python 3.14.5)
+- PostgreSQL 16 with the PostGIS extension for database-backed workflows
 
 ## Start
 
 ```powershell
 python -m pip install -r requirements.txt
-docker compose up -d --build
+$env:DATABASE_URL = "postgresql://sed_admin:your_password@localhost:5432/sed"
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Open the integrated front end at `http://localhost:8000/ui/`. It calls the same FastAPI origin, so local use does not require a separate front-end server or CORS setup. When the database is unavailable the page falls back to its clearly labeled demo data.
 
-The database is published on host port `5433` by default because port `5432` is often already used by another local PostgreSQL service. Set `SED_DB_HOST_PORT=5432` only when that port is free.
-
-On a new database volume, the SQL files in `db/migrations` are applied by the Postgres image in filename order. To rebuild from zero, run `docker compose down -v` and then `docker compose up -d --build`.
+Apply the SQL files in `db/migrations` in filename order to the local database before using database-backed features. The Docker Compose files remain available as an optional deployment path, but Docker is not required for local API/UI debugging.
 
 Run the local unit tests with `python -m pytest -q`. The importer supports `python -m importers.run --source ngos --file path.csv --dry-run`; without `--dry-run`, it records source rows in PostgreSQL staging tables. Source-specific core entity upserts are not yet implemented.
 
@@ -31,6 +30,4 @@ Run the local unit tests with `python -m pytest -q`. The importer supports `pyth
 
 ## Validation status
 
-Python checks include API/OpenAPI and SQL grammar checks; PostgreSQL migration statements parse with `pglast`. Database migrations, SQL assertions, concurrency, RLS, performance benchmarks and crash recovery have not been run: Docker CLI is installed in the authoring environment, but no Docker Desktop executable/daemon or local `psql` is available. No performance or patentability claims are made. See `docs/assumptions.md` and `docs/loop_log.md` for gaps.
-
-Front-end routes, OpenAPI schema, CORS defaults and request conventions are documented in [docs/frontend-integration.md](docs/frontend-integration.md). The API is not safe for public exposure until authentication and authorization are integrated.
+Python checks include API/OpenAPI and SQL grammar checks; PostgreSQL migration statements parse with `pglast`. No performance or patentability claims are made. See `docs/assumptions.md` and `docs/loop_log.md` for gaps.

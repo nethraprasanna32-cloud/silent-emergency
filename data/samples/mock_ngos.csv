@@ -1,0 +1,4 @@
+name,registration_id,type,state,district,address,capacity
+Seva Sahayata Foundation,MOCK-NGO-001,food relief,Karnataka,Bengaluru Urban,12 Demo Street Bengaluru,120
+Udaan Community Care,MOCK-NGO-002,medical support,Maharashtra,Pune,45 Sample Road Pune,60
+,MOCK-NGO-INVALID,shelter support,Delhi,New Delhi,Missing name row,20

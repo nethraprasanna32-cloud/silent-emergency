@@ -1,8 +1,24 @@
+# Git and local development metadata
 .git
-**/.git
-.venv
-**/__pycache__
-.pytest_cache
-data/incoming
-reports
+.gitignore
+.venv/
+venv/
+.pytest_cache/
+__pycache__/
 *.py[cod]
+
+# Local-only configuration and generated data
+.env
+.env.*
+data/incoming/
+reports/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/

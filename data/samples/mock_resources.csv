@@ -1,0 +1,4 @@
+type,quantity,expiry,perishable
+Emergency Food Kit,100,2027-12-31T23:59:59Z,true
+First Aid Kit,40,2028-06-30T23:59:59Z,false
+Blanket,75,,false

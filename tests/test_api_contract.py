@@ -6,7 +6,7 @@ client=TestClient(app)
 def test_frontend_routes_are_published_in_openapi():
     paths=client.get('/openapi.json').json()['paths']
     expected={
-        '/signals':'post','/persons':'post','/households':'post','/needs':'get',
+        '/signals':'post','/persons':'post','/households':'post','/needs':'get','/areas':'get','/areas':'post','/need-types':'get','/cases':'post',
         '/matches':'get','/matches/{match_id}/accept':'post','/matches/{match_id}/reject':'post',
         '/matches/{match_id}/complete':'post','/simulate':'post','/metrics':'get','/audit':'get',
         '/audit/verify':'get','/imports':'post','/imports/{batch_id}/report':'get',
@@ -16,6 +16,8 @@ def test_frontend_routes_are_published_in_openapi():
     }
     for path,method in expected.items():
         assert method in paths[path]
+    assert 'post' in paths['/resources']
+    assert 'post' in paths['/volunteers']
 
 def test_cors_preflight_for_default_frontend_origin():
     response=client.options('/needs',headers={
@@ -51,3 +53,7 @@ def test_frontend_is_served_by_same_fastapi_origin():
     assert response.status_code==200
     assert 'Silent Emergency Database System' in response.text
     assert 'Import data' in response.text
+    assert 'Add a case' in response.text
+    assert 'id="open-case-inline"' in response.text
+    assert 'id="open-case"' not in response.text
+    assert response.text.index('id="scan"') > response.text.index('id="pg-match"')

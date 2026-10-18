@@ -51,14 +51,25 @@ def _json_rows(cur):
 
 def _type_for_ui(name):
     value=(name or '').lower()
-    if 'medical' in value or 'health' in value:return 'medical'
-    if 'shelter' in value or 'wellbeing' in value or 'housing' in value:return 'shelter'
+    if 'medical' in value or 'health' in value or 'first_aid' in value:return 'medical'
+    if 'shelter' in value or 'wellbeing' in value or 'housing' in value or 'community_visit' in value:return 'shelter'
     return 'food'
 
 def _map_bounds(c):
-    row=c.execute("SELECT min(ST_X(point::geometry)),max(ST_X(point::geometry)),min(ST_Y(point::geometry)),max(ST_Y(point::geometry)) FROM location WHERE point IS NOT NULL").fetchone()
+    row=c.execute("""WITH points AS (
+      SELECT point FROM location WHERE point IS NOT NULL
+      UNION ALL SELECT centroid FROM area WHERE centroid IS NOT NULL
+    ) SELECT min(ST_X(point::geometry)),max(ST_X(point::geometry)),min(ST_Y(point::geometry)),max(ST_Y(point::geometry)) FROM points""").fetchone()
     if not row or row[0] is None:return None
     return row
+
+def _location_for_area(c, area_id: int):
+    row=c.execute("SELECT id,ST_X(centroid::geometry),ST_Y(centroid::geometry) FROM area WHERE id=%s",(area_id,)).fetchone()
+    if not row: raise HTTPException(404,'area not found')
+    existing=c.execute("SELECT id FROM location WHERE area_id=%s AND point IS NOT NULL ORDER BY id LIMIT 1",(area_id,)).fetchone()
+    if existing:return existing[0]
+    if row[1] is None: raise HTTPException(422,'area has no map coordinates')
+    return c.execute("INSERT INTO location(area_id,point,accuracy_level) VALUES(%s,ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,'area_centroid') RETURNING id",(area_id,row[1],row[2])).fetchone()[0]
 
 def _map_xy(bounds,lon,lat):
     if bounds is None or lon is None or lat is None:return {'x':320,'y':200}
@@ -110,6 +121,8 @@ class HouseholdIn(BaseModel):
 class ResourcePatch(BaseModel):
     quantity_available: int | None = Field(default=None, ge=0)
     expires_at: datetime | None = None
+    owner_ngo_id: int | None = Field(default=None, gt=0)
+    area_id: int | None = Field(default=None, gt=0)
 
 class AvailabilityPatch(BaseModel):
     start: datetime
@@ -131,12 +144,145 @@ class AssignmentIn(BaseModel):
     score_breakdown: dict = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=8,max_length=200)
 
+class AreaIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    area_type: str = Field(default='ward', min_length=3, max_length=20)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    parent_id: int | None = Field(default=None, gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+class CaseIn(BaseModel):
+    person_name: str = Field(min_length=2, max_length=160)
+    pseudonym: str | None = Field(default=None, max_length=120)
+    need_type: str = Field(min_length=2, max_length=120)
+    area_id: int = Field(gt=0)
+    priority: int = Field(default=60, ge=1, le=100)
+    notes: str = Field(default='', max_length=2000)
+    consent: bool = True
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+class ResourceIn(BaseModel):
+    resource_type: str = Field(min_length=2, max_length=120)
+    category: str = Field(min_length=2, max_length=40)
+    quantity: int = Field(gt=0, le=1000000)
+    ngo_id: int = Field(gt=0)
+    area_id: int = Field(gt=0)
+    expires_at: datetime | None = None
+    perishable: bool = False
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+class VolunteerIn(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    pseudonym: str = Field(min_length=2, max_length=120)
+    mode: str = Field(default='walk', min_length=2, max_length=30)
+    area_id: int = Field(gt=0)
+    skills: list[str] = Field(default_factory=list, max_length=12)
+    verified: bool = False
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
 @app.get("/health")
 def health():
     try:
         with connection() as c: return {"ok": c.execute("select 1").fetchone()[0] == 1, "database":"available"}
     except Exception as exc:
         return {"ok":False,"database":"unavailable","error":type(exc).__name__}
+
+@app.get('/areas')
+def list_areas():
+    with connection() as c:
+        return _json_rows(c.execute("""SELECT DISTINCT ON (COALESCE(parent_id,0),area_type,normalized_name) id,name,area_type,parent_id,code,accuracy_level,
+          ST_Y(centroid::geometry) latitude,ST_X(centroid::geometry) longitude
+          FROM area ORDER BY COALESCE(parent_id,0),area_type,normalized_name,id"""))
+
+@app.post('/areas')
+def create_area(body: AreaIn):
+    with connection() as c:
+        cached=_idempotency_get(c,body.idempotency_key,'area',body.model_dump(mode='json'))
+        if cached is not None:return cached
+        area_type=body.area_type.lower(); name=body.name.strip()
+        existing=c.execute("SELECT id FROM area WHERE parent_id IS NOT DISTINCT FROM %s AND area_type=%s AND normalized_name=lower(trim(%s)) ORDER BY id LIMIT 1",(body.parent_id,area_type,name)).fetchone()
+        if existing:
+            row=c.execute("""UPDATE area SET centroid=ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,accuracy_level='user_entered'
+              WHERE id=%s RETURNING id,name,area_type""",(body.longitude,body.latitude,existing[0])).fetchone()
+        else:
+            row=c.execute("""INSERT INTO area(parent_id,area_type,name,centroid,accuracy_level)
+              VALUES(%s,%s,%s,ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,'user_entered') RETURNING id,name,area_type""",
+              (body.parent_id,area_type,name,body.longitude,body.latitude)).fetchone()
+        response={'id':row[0],'name':row[1],'area_type':row[2]}
+        _idempotency_put(c,body.idempotency_key,'area',body.model_dump(mode='json'),response)
+        return response
+
+@app.get('/need-types')
+def list_need_types():
+    with connection() as c:
+        return _json_rows(c.execute("""SELECT nt.id,nt.name,nt.required_skills,nt.sla,
+          rt.name resource_type FROM need_type nt LEFT JOIN resource_type rt ON rt.id=nt.resource_type_id ORDER BY nt.name"""))
+
+@app.post('/cases', status_code=201)
+def create_case(body: CaseIn):
+    with connection() as c:
+        cached=_idempotency_get(c,body.idempotency_key,'case',body.model_dump(mode='json'))
+        if cached is not None:return cached
+        location_id=_location_for_area(c,body.area_id)
+        nt=c.execute("SELECT id,name,sla FROM need_type WHERE name=%s OR name=lower(%s)",(body.need_type,body.need_type)).fetchone()
+        if not nt: raise HTTPException(404,'need type not found')
+        pseudonym=body.pseudonym or f"case-{body.idempotency_key[:40]}"
+        person=c.execute("""INSERT INTO person(pseudonym,display_name,area_id,location_id,household_size)
+          VALUES(%s,%s,%s,%s,1) ON CONFLICT(pseudonym) DO UPDATE SET display_name=COALESCE(EXCLUDED.display_name,person.display_name),
+          area_id=EXCLUDED.area_id,location_id=EXCLUDED.location_id RETURNING id""",
+          (pseudonym,body.person_name,body.area_id,location_id)).fetchone()[0]
+        if body.consent and not c.execute("SELECT 1 FROM person_consent WHERE person_id=%s AND purpose='need_inference' AND withdrawn_at IS NULL",(person,)).fetchone():
+            c.execute("INSERT INTO person_consent(person_id,purpose) VALUES(%s,'need_inference')",(person,))
+        score=body.priority/100
+        existing=c.execute("SELECT id FROM need WHERE person_id=%s AND need_type_id=%s AND status IN ('suspected','confirmed') FOR UPDATE",(person,nt[0])).fetchone()
+        if existing:
+            need_id=existing[0]
+            c.execute("""UPDATE need SET area_id=%s,location_id=%s,priority=%s,score=GREATEST(score,%s),
+              confidence=GREATEST(confidence,.9),updated_at=now(),sla_due_at=now()+%s WHERE id=%s""",
+              (body.area_id,location_id,body.priority,score,nt[2],need_id))
+        else:
+            need_id=c.execute("""INSERT INTO need(person_id,need_type_id,area_id,location_id,status,score,confidence,priority,sla_due_at)
+              VALUES(%s,%s,%s,%s,'confirmed',%s,.9,%s,now()+%s) RETURNING id""",
+              (person,nt[0],body.area_id,location_id,score,body.priority,nt[2])).fetchone()[0]
+        c.execute("INSERT INTO audit_log(action,entity_type,entity_id,details) VALUES('create','need',%s,%s)",(need_id,Jsonb({'source':'user_case','person':body.person_name,'notes':body.notes,'area_id':body.area_id})))
+        response={'id':need_id,'person_id':person,'need_type':nt[1],'area_id':body.area_id,'priority':body.priority,'status':'confirmed','created':not bool(existing)}
+        _idempotency_put(c,body.idempotency_key,'case',body.model_dump(mode='json'),response)
+        return response
+
+@app.post('/resources', status_code=201)
+def create_resource(body: ResourceIn):
+    with connection() as c:
+        cached=_idempotency_get(c,body.idempotency_key,'resource_create',body.model_dump(mode='json'))
+        if cached is not None:return cached
+        if not c.execute("SELECT 1 FROM ngo WHERE id=%s AND active",(body.ngo_id,)).fetchone(): raise HTTPException(404,'active NGO not found')
+        location_id=_location_for_area(c,body.area_id)
+        rt=c.execute("""INSERT INTO resource_type(name,category,unit,perishable) VALUES(%s,%s,'unit',%s)
+          ON CONFLICT(name) DO UPDATE SET category=EXCLUDED.category,perishable=EXCLUDED.perishable RETURNING id""",
+          (body.resource_type.strip(),body.category.strip().lower(),body.perishable)).fetchone()[0]
+        row=c.execute("""INSERT INTO resource(resource_type_id,owner_ngo_id,location_id,quantity_total,quantity_available,expires_at,perishable)
+          VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+          (rt,body.ngo_id,location_id,body.quantity,body.quantity,body.expires_at,body.perishable)).fetchone()
+        c.execute("INSERT INTO audit_log(action,entity_type,entity_id,details) VALUES('create','resource',%s,%s)",(row[0],Jsonb({'ngo_id':body.ngo_id,'area_id':body.area_id,'quantity':body.quantity})))
+        response={'id':row[0],'resource_type':body.resource_type,'quantity':body.quantity,'ngo_id':body.ngo_id,'area_id':body.area_id}
+        _idempotency_put(c,body.idempotency_key,'resource_create',body.model_dump(mode='json'),response)
+        return response
+
+@app.post('/volunteers', status_code=201)
+def create_volunteer(body: VolunteerIn):
+    with connection() as c:
+        cached=_idempotency_get(c,body.idempotency_key,'volunteer_create',body.model_dump(mode='json'))
+        if cached is not None:return cached
+        location_id=_location_for_area(c,body.area_id)
+        row=c.execute("""INSERT INTO volunteer(person_name,pseudonym,home_area_id,location_id,mode,verified)
+          VALUES(%s,%s,%s,%s,%s,%s) RETURNING id""",
+          (body.name,body.pseudonym,body.area_id,location_id,body.mode.lower(),body.verified)).fetchone()
+        for skill in {s.strip().lower() for s in body.skills if s.strip()}:
+            c.execute("INSERT INTO volunteer_skill(volunteer_id,skill) VALUES(%s,%s) ON CONFLICT DO NOTHING",(row[0],skill))
+        c.execute("INSERT INTO audit_log(action,entity_type,entity_id,details) VALUES('create','volunteer',%s,%s)",(row[0],Jsonb({'area_id':body.area_id,'skills':body.skills})))
+        response={'id':row[0],'name':body.name,'area_id':body.area_id}
+        _idempotency_put(c,body.idempotency_key,'volunteer_create',body.model_dump(mode='json'),response)
+        return response
 
 @app.post("/signals")
 def post_signal(body: SignalIn):
@@ -210,8 +356,13 @@ def patch_resource(resource_id:int,body:ResourcePatch,idempotency_key:str=Header
         row=c.execute("SELECT quantity_total FROM resource WHERE id=%s FOR UPDATE",(resource_id,)).fetchone()
         if row is None: raise HTTPException(404,'resource not found')
         if 'quantity_available' in changes and changes['quantity_available']>row[0]: raise HTTPException(422,'available quantity cannot exceed total')
+        if 'owner_ngo_id' in changes and not c.execute("SELECT 1 FROM ngo WHERE id=%s AND active",(changes['owner_ngo_id'],)).fetchone(): raise HTTPException(404,'active NGO not found')
         sets=[]; params=[]
-        for col,val in changes.items(): sets.append(f'{col}=%s'); params.append(val)
+        for col,val in changes.items():
+            if col=='area_id':
+                params.append(_location_for_area(c,val)); sets.append('location_id=%s')
+            else:
+                sets.append(f'{col}=%s'); params.append(val)
         params.extend([resource_id])
         cur=c.execute(f"UPDATE resource SET {','.join(sets)},updated_at=now() WHERE id=%s RETURNING id,quantity_available,expires_at",params)
         r=cur.fetchone(); response={'id':r[0],'quantity_available':r[1],'expires_at':r[2]}
@@ -256,7 +407,7 @@ def assign(body:AssignmentIn):
                 if cached is not None:return cached
                 score=c.execute("SELECT coalesce(score,0) FROM need WHERE id=%s",(body.need_id,)).fetchone()
                 if not score: raise HTTPException(404,'need not found')
-                match_id=c.execute("SELECT sed_assign(%s,%s,%s,%s,%s,%s::jsonb)",(body.need_id,body.volunteer_id,body.resource_id,body.quantity,body.score if body.score is not None else score[0],Jsonb(body.score_breakdown or {'source':'frontend_candidate_score'}))).fetchone()[0]
+                match_id=c.execute("SELECT sed_assign(%s::bigint,%s::bigint,%s::bigint,%s::int,%s::numeric,%s::jsonb)",(body.need_id,body.volunteer_id,body.resource_id,body.quantity,body.score if body.score is not None else score[0],Jsonb(body.score_breakdown or {'source':'frontend_candidate_score'}))).fetchone()[0]
                 d=c.execute("""SELECT m.status,m.quantity,n.id,nt.name,coalesce(a.name,'Area not set'),
                   coalesce(rt.name,'No resource'),coalesce(g.name,'Unassigned NGO'),coalesce(v.person_name,'Unassigned volunteer'),r.quantity_available
                   FROM match m JOIN need n ON n.id=m.need_id JOIN need_type nt ON nt.id=n.need_type_id
@@ -275,34 +426,40 @@ def assign(body:AssignmentIn):
 def get_needs(status: str | None = None, area: int | None = None):
     with connection() as c:
         rows=c.execute("""SELECT n.id,n.person_id,n.household_id,n.need_type_id,nt.name need_type,n.status,n.score,n.confidence,n.priority,
-          a.name area_name,ST_X(l.point::geometry) lon,ST_Y(l.point::geometry) lat,
+          a.id area_id,a.name area_name,COALESCE(ST_X(l.point::geometry),ST_X(a.centroid::geometry)) lon,
+          COALESCE(ST_Y(l.point::geometry),ST_Y(a.centroid::geometry)) lat,
           coalesce(array_agg(DISTINCT st.name) FILTER(WHERE st.name IS NOT NULL),'{}') signal_names
           FROM need n JOIN need_type nt ON nt.id=n.need_type_id LEFT JOIN area a ON a.id=n.area_id LEFT JOIN location l ON l.id=n.location_id
           LEFT JOIN need_signal ns ON ns.need_id=n.id LEFT JOIN signal s ON s.id=ns.signal_id LEFT JOIN signal_type st ON st.id=s.signal_type_id
-          WHERE (%s::text IS NULL OR n.status::text=%s::text OR (%s::text='assigned' AND n.status IN ('matched','in_progress')))
-          AND (%s::bigint IS NULL OR n.area_id=%s::bigint) GROUP BY n.id,nt.name,a.name,l.point ORDER BY n.priority DESC,n.detected_at LIMIT 500""",(status,status,status,area,area)).fetchall()
+          WHERE n.status <> 'rejected' AND (%s::text IS NULL OR n.status::text=%s::text OR (%s::text='assigned' AND n.status IN ('matched','in_progress')))
+          AND (%s::bigint IS NULL OR n.area_id=%s::bigint) GROUP BY n.id,nt.name,a.id,a.name,a.centroid,l.point ORDER BY n.priority DESC,n.detected_at LIMIT 500""",(status,status,status,area,area)).fetchall()
         bounds=_map_bounds(c); result=[]
         for r in rows:
-            xy=_map_xy(bounds,r[10],r[11]); ui_type=_type_for_ui(r[4]); sig=list(r[12] or [])
-            result.append({'id':r[0],'person_id':r[1],'household_id':r[2],'need_type_id':r[3],'type':ui_type,'area':r[9] or 'Area not set',**xy,'pr':int(r[8]),'score':float(r[6]),'confidence':float(r[7]),'sig':sig,'status':'assigned' if r[5] in ('matched','in_progress','resolved') else 'detected'})
+            xy=_map_xy(bounds,r[11],r[12]); ui_type=_type_for_ui(r[4]); sig=list(r[13] or [])
+            result.append({'id':r[0],'person_id':r[1],'household_id':r[2],'need_type_id':r[3],'type':ui_type,'area_id':r[9],'area':r[10] or 'Area not set',**xy,'pr':int(r[8]),'score':float(r[6]),'confidence':float(r[7]),'sig':sig,'raw_status':r[5],'status':'assigned' if r[5] in ('matched','in_progress','resolved') else 'detected'})
         return result
 
 @app.get('/resources')
 def list_resources():
     with connection() as c:
-        rows=c.execute("""SELECT r.id,rt.name,rt.category,r.quantity_available,ST_X(l.point::geometry),ST_Y(l.point::geometry),coalesce(g.name,'Unassigned NGO')
+        rows=c.execute("""SELECT r.id,rt.name,rt.category,r.quantity_available,
+          COALESCE(ST_X(l.point::geometry),ST_X(a.centroid::geometry)),COALESCE(ST_Y(l.point::geometry),ST_Y(a.centroid::geometry)),
+          coalesce(g.name,'Unassigned NGO'),COALESCE(l.area_id,a.id),coalesce(a.name,'Area not set')
           FROM resource r JOIN resource_type rt ON rt.id=r.resource_type_id LEFT JOIN ngo g ON g.id=r.owner_ngo_id LEFT JOIN location l ON l.id=r.location_id
+          LEFT JOIN area a ON a.id=l.area_id
           WHERE r.quantity_available>0 ORDER BY rt.name,r.expires_at NULLS LAST,r.id LIMIT 1000""").fetchall();bounds=_map_bounds(c); result=[]
-        for r in rows: result.append({'id':r[0],'name':r[1],'type':_type_for_ui(r[2]),'qty':r[3],**_map_xy(bounds,r[4],r[5]),'ngo':r[6]})
+        for r in rows: result.append({'id':r[0],'name':r[1],'type':_type_for_ui(r[2]),'qty':r[3],**_map_xy(bounds,r[4],r[5]),'ngo':r[6],'area_id':r[7],'area':r[8]})
         return result
 
 @app.get('/volunteers')
 def list_volunteers():
     with connection() as c:
-        rows=c.execute("""SELECT v.id,v.person_name,coalesce(min(vs.skill),'community_visit') skill,ST_X(l.point::geometry),ST_Y(l.point::geometry),
+        rows=c.execute("""SELECT v.id,v.person_name,coalesce(min(vs.skill),'community_visit') skill,
+          COALESCE(ST_X(l.point::geometry),ST_X(a.centroid::geometry)),COALESCE(ST_Y(l.point::geometry),ST_Y(a.centroid::geometry)),
           (v.active AND NOT EXISTS(SELECT 1 FROM match m WHERE m.volunteer_id=v.id AND m.status IN ('proposed','accepted') AND (m.during IS NULL OR m.during @> now()))) free
           FROM volunteer v LEFT JOIN volunteer_skill vs ON vs.volunteer_id=v.id LEFT JOIN location l ON l.id=v.location_id
-          GROUP BY v.id,l.point ORDER BY v.id LIMIT 1000""").fetchall();bounds=_map_bounds(c);result=[]
+          LEFT JOIN area a ON a.id=COALESCE(l.area_id,v.home_area_id)
+          GROUP BY v.id,l.point,a.centroid ORDER BY v.id LIMIT 1000""").fetchall();bounds=_map_bounds(c);result=[]
         for r in rows: result.append({'id':r[0],'name':r[1],'skill':_type_for_ui(r[2]),**_map_xy(bounds,r[3],r[4]),'free':bool(r[5])})
         return result
 
@@ -310,15 +467,19 @@ def list_volunteers():
 def directory():
     """Return import-backed directory records for the Directory UI."""
     with connection() as c:
-        ngos = _json_rows(c.execute("SELECT id,name,registration_id,ngo_type,state,district,address,sectors,capacity,active FROM ngo ORDER BY name"))
+        ngos = _json_rows(c.execute("""SELECT n.id,n.name,n.registration_id,n.ngo_type,n.state,n.district,n.address,n.sectors,n.capacity,n.active,
+          l.area_id,coalesce(a.name,'Area not set') area FROM ngo n LEFT JOIN location l ON l.id=n.location_id LEFT JOIN area a ON a.id=l.area_id ORDER BY n.name"""))
         volunteers = _json_rows(c.execute("""SELECT v.id,v.person_name name,v.mode,v.verified,v.active,
           coalesce(array_agg(DISTINCT s.skill) FILTER (WHERE s.skill IS NOT NULL),'{}') skills,
-          coalesce(array_agg(DISTINCT l.language) FILTER (WHERE l.language IS NOT NULL),'{}') languages
+          coalesce(array_agg(DISTINCT l.language) FILTER (WHERE l.language IS NOT NULL),'{}') languages,
+          v.home_area_id area_id,coalesce(a.name,'Area not set') area
           FROM volunteer v LEFT JOIN volunteer_skill s ON s.volunteer_id=v.id
-          LEFT JOIN volunteer_language l ON l.volunteer_id=v.id GROUP BY v.id ORDER BY v.person_name"""))
+          LEFT JOIN volunteer_language l ON l.volunteer_id=v.id LEFT JOIN area a ON a.id=v.home_area_id GROUP BY v.id,a.name ORDER BY v.person_name"""))
         resources = _json_rows(c.execute("""SELECT r.id,rt.name item,rt.category,r.quantity_available quantity,
-          r.quantity_total,r.expires_at,r.perishable,coalesce(n.name,'Unassigned NGO') ngo
+          r.quantity_total,r.expires_at,r.perishable,coalesce(n.name,'Unassigned NGO') ngo,
+          l.area_id,coalesce(a.name,'Area not set') area
           FROM resource r JOIN resource_type rt ON rt.id=r.resource_type_id LEFT JOIN ngo n ON n.id=r.owner_ngo_id
+          LEFT JOIN location l ON l.id=r.location_id LEFT JOIN area a ON a.id=l.area_id
           ORDER BY rt.name,r.id"""))
         return {'ngos':ngos,'volunteers':volunteers,'resources':resources}
 
@@ -463,12 +624,12 @@ def simulate():
         need_ids=sorted({r[0] for r in rows}); vol_ids=sorted({r[1] for r in rows}); weights={'distance':.35,'priority':.3,'skill':.2,'reliability':.15,'starvation':.2,'zone_service':.2,'expiry':.15}
         costs=[[float('inf') for _ in vol_ids] for _ in need_ids]
         for n,v,d,p,s,rel,star,zone,exp in rows:
-            costs[need_ids.index(n)][vol_ids.index(v)]=fairness_cost(d,p,s,rel,star,zone,exp,weights)
+            costs[need_ids.index(n)][vol_ids.index(v)]=fairness_cost(float(d),float(p),float(s),float(rel),float(star),float(zone),float(exp),weights)
         pairs,total=solve(costs)
         return {'assignments':[{'need_id':need_ids[i],'volunteer_id':vol_ids[j]} for i,j in pairs],'total_cost':total,'projected_assignment_count':len(pairs),'simulation_only':True}
 
 # Serve the paired static front end from the same origin as the API for local demos.
 from fastapi.staticfiles import StaticFiles
-_ui_dir=Path(__file__).resolve().parent.parent/'silent-emergency'
+_ui_dir=Path(__file__).resolve().parent.parent/'frontend'
 if _ui_dir.is_dir():
     app.mount('/ui',StaticFiles(directory=str(_ui_dir),html=True),name='ui')
